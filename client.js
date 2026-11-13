@@ -1,0 +1,599 @@
+window.__ModuleLoader__.load({
+  id: 'dsh-usage-hub',
+  factory(require) {
+    const React = require('react')
+    const h = React.createElement
+
+    /** Locale namespace owned by this plugin. */
+    const NS = 'usage-hub'
+    /** Host route answered by `index.js`. */
+    const API = '/dsh-usage-hub/api/snapshot'
+    /** Client-side re-read interval; the host caches for its own TTL. */
+    const POLL_MS = 5 * 60 * 1000
+    /** Id the pills point at with `aria-controls`. */
+    const PANEL_ID = 'dshuh-usage-panel'
+
+    const en = {
+      'pill.deepseek': 'DeepSeek {value}',
+      'pill.opencode': 'Go {value}',
+      'pill.deepseekPending': 'DeepSeek …',
+      'pill.opencodePending': 'Go …',
+      'panel.title': 'Subscription usage',
+      'panel.refresh': 'Refresh',
+      'panel.refreshing': 'Refreshing…',
+      'panel.updated': 'Updated {time}',
+      'panel.never': 'Not loaded yet',
+      'panel.error': 'The usage read failed: {detail}',
+      'status.ok': 'Connected',
+      'status.unconfigured': 'Not configured',
+      'status.error': 'Error',
+      'status.disabled': 'Turned off',
+      'status.loading': 'Loading…',
+      'deepseek.breakdown': 'Topped up {toppedUp} · granted {granted}',
+      'deepseek.unavailable': 'This account cannot call the API right now.',
+      'deepseek.empty': 'The account reported no balance line.',
+      'deepseek.hint': 'Set the API key named by this bundle configuration, then refresh.',
+      'opencode.window.rolling': 'Rolling',
+      'opencode.window.weekly': 'Weekly',
+      'opencode.window.monthly': 'Monthly',
+      'opencode.limited': 'limit reached',
+      'opencode.resets': 'Resets {time}',
+      'opencode.workspace': 'Console workspace {name}',
+      'opencode.openUsage': 'Open usage page',
+      'opencode.hint': 'Sign in to the OpenCode Console with the desktop app, or start a server and configure its address.',
+      'hint.missingCredential': 'No API key is set for this bundle. Add it in Settings → Models, then refresh.',
+      'hint.notSignedIn': 'The OpenCode Console workspace is unknown. Sign in with the OpenCode desktop app, then refresh.',
+      'hint.cliMissing': 'The OpenCode CLI was not found. Set opencode.cliPath in this bundle configuration.',
+      'common.na': '—',
+    }
+
+    const zh = {
+      'pill.deepseek': 'DeepSeek {value}',
+      'pill.opencode': 'Go {value}',
+      'pill.deepseekPending': 'DeepSeek …',
+      'pill.opencodePending': 'Go …',
+      'panel.title': '订阅用量',
+      'panel.refresh': '刷新',
+      'panel.refreshing': '刷新中…',
+      'panel.updated': '更新于 {time}',
+      'panel.never': '尚未加载',
+      'panel.error': '读取用量失败：{detail}',
+      'status.ok': '已连接',
+      'status.unconfigured': '未配置',
+      'status.error': '出错',
+      'status.disabled': '已关闭',
+      'status.loading': '加载中…',
+      'deepseek.breakdown': '充值 {toppedUp} · 赠金 {granted}',
+      'deepseek.unavailable': '当前账户余额不足以调用 API。',
+      'deepseek.empty': '账户没有返回余额条目。',
+      'deepseek.hint': '配置本插件指定的 API Key 后刷新。',
+      'opencode.window.rolling': '滚动',
+      'opencode.window.weekly': '每周',
+      'opencode.window.monthly': '每月',
+      'opencode.limited': '已受限',
+      'opencode.resets': '{time} 重置',
+      'opencode.workspace': 'Console 工作区 {name}',
+      'opencode.openUsage': '打开用量页',
+      'opencode.hint': '请先用桌面端登录 OpenCode Console，或启动一个 server 并在配置里填它的地址。',
+      'hint.missingCredential': '本插件指定的 API Key 还没配置，请在「设置 → 模型」里填好后刷新。',
+      'hint.notSignedIn': '没有找到已登录的 OpenCode Console 工作区，请先用桌面端登录后刷新。',
+      'hint.cliMissing': '没找到 OpenCode CLI，请在本插件配置里填写 opencode.cliPath。',
+      'common.na': '—',
+    }
+
+    /** Currency symbols for the balance lines DeepSeek reports. */
+    const SIGNS = { CNY: '¥', USD: '$' }
+    /** Allowance windows, in display order, with their bar tint class. */
+    const WINDOWS = [
+      { key: 'rolling', tint: 'dshuh-tint--a' },
+      { key: 'weekly', tint: 'dshuh-tint--b' },
+      { key: 'monthly', tint: 'dshuh-tint--c' },
+    ]
+
+    /** Create one immutable-state store with a React-compatible subscription. */
+    function createStore(initial) {
+      let state = initial
+      const listeners = new Set()
+      return {
+        get: () => state,
+        set(patch) {
+          state = { ...state, ...patch }
+          for (const listener of [...listeners]) listener()
+        },
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => { listeners.delete(listener) }
+        },
+      }
+    }
+
+    /** Shared read state; the dock and the panel are two views of it. */
+    const store = createStore({
+      snapshot: null,
+      error: null,
+      loading: true,
+      busy: false,
+      open: false,
+      anchor: null,
+    })
+    /** Newest snapshot in flight, so a double click cannot start two reads. */
+    let inflight = null
+
+    /**
+     * Read the host snapshot.
+     * @param force - true to bypass the host cache.
+     * @returns settled promise.
+     */
+    function load(force) {
+      if (inflight !== null) return inflight
+      store.set({ busy: true })
+      inflight = (async () => {
+        try {
+          const url = new URL(API, document.baseURI)
+          if (force) url.searchParams.set('refresh', '1')
+          const response = await fetch(url, { headers: { accept: 'application/json' } })
+          const payload = await response.json().catch(() => null)
+          if (payload === null || payload.ok !== true) {
+            throw new Error(payload?.error?.message ?? `HTTP ${response.status}`)
+          }
+          store.set({ snapshot: payload.value, error: null, loading: false })
+        } catch (error) {
+          store.set({ error: String(error?.message ?? error), loading: false })
+        } finally {
+          store.set({ busy: false })
+          inflight = null
+        }
+      })()
+      return inflight
+    }
+
+    /** Format one currency amount reported by DeepSeek. */
+    function money(currency, amount) {
+      const sign = SIGNS[currency]
+      if (sign === undefined) return `${currency} ${amount}`
+      return `${sign}${amount}`
+    }
+
+    /** Format one reset instant for the local locale. */
+    function formatReset(ms) {
+      const date = new Date(ms)
+      if (Number.isNaN(date.getTime())) return ''
+      return date.toLocaleString(undefined, {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      })
+    }
+
+    /** Highest allowance percentage a provider reported, or undefined. */
+    function peakPercent(allowance) {
+      let peak
+      for (const window of WINDOWS) {
+        const value = allowance?.[window.key]
+        if (value === undefined) continue
+        const percent = Number(value.percent) || 0
+        peak = peak === undefined ? percent : Math.max(peak, percent)
+      }
+      return peak === undefined ? undefined : Math.round(peak)
+    }
+
+    /** One provider entry by id. */
+    function entryOf(snapshot, id) {
+      return snapshot?.providers?.find((entry) => entry.id === id)
+    }
+
+    /** The pill reading for one provider. */
+    function pillText(t, entry) {
+      if (entry === undefined) return t('panel.never')
+      if (entry.status === 'ok') {
+        if (entry.id === 'deepseek') {
+          const first = entry.balances?.[0]
+          return t('pill.deepseek', { value: first === undefined ? t('common.na') : money(first.currency, first.total) })
+        }
+        const peak = peakPercent(entry.allowance)
+        return t('pill.opencode', { value: peak === undefined ? t('common.na') : `${peak}%` })
+      }
+      if (entry.status === 'unconfigured' || entry.status === 'disabled') return t('pill.unconfigured')
+      return t('pill.failed')
+    }
+
+    /** The pill tone: `warn` when the provider did not answer with a reading. */
+    function pillTone(entry) {
+      if (entry !== undefined && entry.status === 'ok') return ''
+      return ' dshuh-pill--warn'
+    }
+
+    /** Localized status word for one provider. */
+    function statusText(t, entry, loading) {
+      if (entry === undefined) return t(loading ? 'status.loading' : 'status.error')
+      return t(`status.${entry.status}`)
+    }
+
+    /** Localized, actionable hint for one failed provider entry. */
+    function hintOf(t, entry) {
+      const code = entry?.error?.code
+      if (code === 'missing-credential') return t('hint.missingCredential')
+      if (code === 'not-signed-in') return t('hint.notSignedIn')
+      if (code === 'cli-missing') return t('hint.cliMissing')
+      return undefined
+    }
+
+    /** One dot for a provider state. */
+    function Dot(props) {
+      const { entry, tone } = props
+      const state = entry?.status === 'ok' ? (tone === 'b' ? ' dshuh-dot--b' : ' dshuh-dot--a') : ' dshuh-dot--muted'
+      return h('span', { className: `dshuh-dot${state}`, 'aria-hidden': true })
+    }
+
+    /** One pill button with a provider reading. */
+    function Pill(props) {
+      const { t, entry, onClick, open } = props
+      return h('button', {
+        type: 'button',
+        className: `dshuh-pill${pillTone(entry)}`,
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open,
+        'aria-controls': PANEL_ID,
+        'aria-label': entry === undefined ? t('panel.never') : `${entry.label}: ${pillText(t, entry)}`,
+        onClick,
+      },
+        h(Dot, { entry, tone: entry?.id === 'deepseek' ? 'a' : 'b' }),
+        h('span', null, pillText(t, entry)),
+      )
+    }
+
+    /** A pill in the state before the first snapshot lands. */
+    function WaitingPill(props) {
+      const { label, onClick, open } = props
+      return h('button', {
+        type: 'button',
+        className: 'dshuh-pill dshuh-pill--warn',
+        'aria-haspopup': 'dialog',
+        'aria-expanded': open,
+        'aria-controls': PANEL_ID,
+        'aria-label': label,
+        onClick,
+      },
+        h('span', { className: 'dshuh-dot dshuh-dot--muted', 'aria-hidden': true }),
+        h('span', null, label),
+      )
+    }
+
+    /** The composer dock reading that opens the aggregate panel. */
+    function Dock(props) {
+      const { t } = props
+      const state = React.useSyncExternalStore(store.subscribe, store.get, store.get)
+      const rootRef = React.useRef(null)
+
+      // A dock mount belongs to one composer; drop a panel left open when it
+      // unmounts (session switch) instead of leaving a floating orphan.
+      React.useEffect(() => () => { store.set({ open: false }) }, [])
+
+      const toggle = () => {
+        if (state.open) {
+          store.set({ open: false })
+          return
+        }
+        store.set({ open: true, anchor: rootRef.current })
+        if (state.snapshot === null || state.error !== null) void load(false)
+      }
+
+      // Before the first snapshot there is nothing to tell the two providers
+      // apart beyond their names, so the dock keeps both slots occupied to
+      // spare the row a width jump when the readings arrive.
+      if (state.snapshot === null && state.error === null) {
+        return h('span', { className: 'dshuh-root', ref: rootRef },
+          h('style', null, CSS),
+          h(WaitingPill, { label: t('pill.deepseekPending'), open: state.open, onClick: toggle }),
+          h(WaitingPill, { label: t('pill.opencodePending'), open: state.open, onClick: toggle }),
+        )
+      }
+
+      const active = (id) => {
+        const entry = entryOf(state.snapshot, id)
+        return entry === undefined || entry.status === 'disabled' ? undefined : entry
+      }
+      const deepseek = active('deepseek')
+      const opencode = active('opencode-go')
+      if (deepseek === undefined && opencode === undefined) return null
+
+      return h('span', { className: 'dshuh-root', ref: rootRef },
+        h('style', null, CSS),
+        deepseek === undefined ? null : h(Pill, { t, entry: deepseek, open: state.open, onClick: toggle }),
+        opencode === undefined ? null : h(Pill, { t, entry: opencode, open: state.open, onClick: toggle }),
+      )
+    }
+
+    /** One allowance window row. */
+    function Meter(props) {
+      const { t, label, value, tint } = props
+      const percent = value === undefined ? 0 : Math.max(0, Math.min(100, Number(value.percent) || 0))
+      return h('div', { className: 'dshuh-meter' },
+        h('div', { className: 'dshuh-meter-head' },
+          h('span', { className: 'dshuh-meter-label' }, label),
+          h('span', { className: 'dshuh-meter-value' },
+            value === undefined ? t('common.na') : `${Math.round(percent)}%`),
+          value?.limited === true ? h('span', { className: 'dshuh-warn' }, t('opencode.limited')) : null,
+        ),
+        h('div', { className: 'dshuh-track' },
+          h('div', { className: `dshuh-fill ${tint}`, style: { width: `${percent}%` } })),
+        value?.resetsAt ? h('div', { className: 'dshuh-reset' }, t('opencode.resets', { time: formatReset(value.resetsAt) })) : null,
+      )
+    }
+
+    /** A localized hint plus the raw host diagnostic beneath it. */
+    function Notice(props) {
+      const { t, entry, fallbackKey } = props
+      const detail = entry?.error?.message
+      const hint = hintOf(t, entry) ?? t(fallbackKey)
+      return h('div', { className: 'dshuh-hint' },
+        hint,
+        detail === undefined ? null : h('div', { className: 'dshuh-detail' }, detail),
+      )
+    }
+
+    /** DeepSeek balance block. */
+    function DeepSeekBody(props) {
+      const { t, entry } = props
+      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
+      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
+      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'deepseek.hint' })
+
+      const balances = entry.balances ?? []
+      if (balances.length === 0) return h('div', { className: 'dshuh-hint' }, t('deepseek.empty'))
+      return h('div', null,
+        balances.map((balance) => h('div', { key: balance.currency, className: 'dshuh-balance-row' },
+          h('div', { className: 'dshuh-balance' }, money(balance.currency, balance.total)),
+          h('div', { className: 'dshuh-sub' },
+            t('deepseek.breakdown', {
+              toppedUp: money(balance.currency, balance.toppedUp),
+              granted: money(balance.currency, balance.granted),
+            })),
+        )),
+        entry.isAvailable === true ? null : h('div', { className: 'dshuh-warn' }, t('deepseek.unavailable')),
+      )
+    }
+
+    /** OpenCode Go allowance block. */
+    function OpencodeBody(props) {
+      const { t, entry } = props
+      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
+      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
+      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'opencode.hint' })
+
+      return h('div', null,
+        entry.workspace?.name ? h('div', { className: 'dshuh-sub' }, t('opencode.workspace', { name: entry.workspace.name })) : null,
+        WINDOWS.map((window) => h(Meter, {
+          key: window.key,
+          t,
+          label: t(`opencode.window.${window.key}`),
+          value: entry.allowance?.[window.key],
+          tint: window.tint,
+        })),
+        entry.workspace?.usageUrl
+          ? h('a', {
+            className: 'dshuh-link',
+            href: entry.workspace.usageUrl,
+            target: '_blank',
+            rel: 'noreferrer',
+          }, t('opencode.openUsage'))
+          : null,
+      )
+    }
+
+    /** One provider section in the panel. */
+    function Section(props) {
+      const { t, entry, tone, loading, children } = props
+      return h('section', { className: 'dshuh-section' },
+        h('div', { className: 'dshuh-section-head' },
+          h(Dot, { entry, tone }),
+          h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
+          h('span', { className: 'dshuh-status' }, statusText(t, entry, loading)),
+        ),
+        children,
+      )
+    }
+
+    /** The frame overlay panel with both providers and the refresh control. */
+    function Panel(props) {
+      const { t } = props
+      const state = React.useSyncExternalStore(store.subscribe, store.get, store.get)
+      const panelRef = React.useRef(null)
+      const wasOpen = React.useRef(false)
+      const [placement, setPlacement] = React.useState(null)
+      const loading = state.snapshot === null && state.error === null
+
+      // The panel opens upward from the composer; the box is capped by the room
+      // actually left above the dock so the header never scrolls out of reach.
+      React.useEffect(() => {
+        if (!state.open) return undefined
+        const anchor = state.anchor
+        const place = () => {
+          if (anchor === null || anchor === undefined) return
+          const rect = anchor.getBoundingClientRect()
+          const width = Math.min(360, window.innerWidth - 24)
+          const bottom = Math.max(12, window.innerHeight - rect.top + 8)
+          setPlacement({
+            left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+            bottom,
+            width,
+            maxHeight: Math.max(120, window.innerHeight - bottom - 12),
+          })
+        }
+        place()
+        window.addEventListener('resize', place)
+        return () => { window.removeEventListener('resize', place) }
+      }, [state.open, state.anchor])
+
+      // A dialog with buttons needs its own focus; give it the panel, and hand
+      // focus back to the reading that opened it.
+      React.useEffect(() => {
+        if (state.open && placement !== null) panelRef.current?.focus()
+      }, [state.open, placement])
+      React.useEffect(() => {
+        if (!state.open && wasOpen.current) {
+          const anchor = state.anchor
+          const button = anchor?.querySelector?.('button')
+          if (button !== null && button !== undefined) button.focus()
+        }
+        wasOpen.current = state.open
+      }, [state.open, state.anchor])
+
+      React.useEffect(() => {
+        if (!state.open) return undefined
+        const onPointer = (event) => {
+          const panel = panelRef.current
+          const anchor = state.anchor
+          if (panel !== null && panel.contains(event.target)) return
+          if (anchor !== null && anchor !== undefined && anchor.contains(event.target)) return
+          store.set({ open: false })
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') store.set({ open: false })
+        }
+        document.addEventListener('pointerdown', onPointer, true)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('pointerdown', onPointer, true)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [state.open, state.anchor])
+
+      if (!state.open || placement === null) return null
+
+      const deepseek = entryOf(state.snapshot, 'deepseek')
+      const opencode = entryOf(state.snapshot, 'opencode-go')
+      const updated = state.snapshot === null
+        ? t('panel.never')
+        : t('panel.updated', { time: formatReset(state.snapshot.at) })
+
+      return h('div', {
+        ref: panelRef,
+        id: PANEL_ID,
+        className: 'dshuh-panel',
+        role: 'dialog',
+        tabIndex: -1,
+        'aria-label': t('panel.title'),
+        style: {
+          left: `${placement.left}px`,
+          bottom: `${placement.bottom}px`,
+          width: `${placement.width}px`,
+          maxHeight: `${placement.maxHeight}px`,
+        },
+      },
+        h('style', null, CSS),
+        h('div', { className: 'dshuh-head' },
+          h('span', { className: 'dshuh-title' }, t('panel.title')),
+          h('span', { className: 'dshuh-updated' }, updated),
+          h('button', {
+            type: 'button',
+            className: 'dshuh-refresh',
+            'aria-disabled': state.busy,
+            'aria-busy': state.busy,
+            onClick: () => { if (!state.busy) void load(true) },
+          }, state.busy ? t('panel.refreshing') : t('panel.refresh')),
+        ),
+        h(Section, { t, entry: deepseek, tone: 'a', loading }, h(DeepSeekBody, { t, entry: deepseek })),
+        h(Section, { t, entry: opencode, tone: 'b', loading }, h(OpencodeBody, { t, entry: opencode })),
+        state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
+          t('panel.error', { detail: state.error })),
+      )
+    }
+
+    /** Scoped styles; theme tokens only, so light and dark both inherit. */
+    const CSS = `
+.dshuh-root { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.dshuh-pill {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 1px 8px; border: none; border-radius: var(--dsw-radius-sm);
+  background: transparent; color: var(--dsw-alias-label-tertiary);
+  font-family: inherit; font-size: var(--dsh-content-font-size-secondary, 13px);
+  font-variant-numeric: tabular-nums; white-space: nowrap; cursor: pointer;
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+.dshuh-pill[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary);
+}
+@media (hover: hover) {
+  .dshuh-pill:hover {
+    background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary);
+  }
+}
+.dshuh-pill--warn { color: var(--dsw-alias-label-tertiary); }
+.dshuh-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--dsw-alias-label-tertiary); }
+.dshuh-dot--a { background: var(--dsw-alias-chart-system, var(--dsw-alias-label-tertiary)); }
+.dshuh-dot--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
+.dshuh-dot--muted { background: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
+.dshuh-panel {
+  position: fixed; z-index: 1100; box-sizing: border-box;
+  padding: 12px; border: 0; border-radius: var(--dsw-radius-lg);
+  background: var(--dsw-specific-menu);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
+  font-size: 12px; line-height: 20px; color: var(--dsw-alias-label-secondary);
+  cursor: default; overflow-y: auto;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+.dshuh-panel:focus { outline: none; }
+.dshuh-head { display: flex; align-items: center; gap: 8px; }
+.dshuh-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dshuh-updated { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.dshuh-refresh {
+  border: none; border-radius: var(--dsw-radius-sm); background: transparent;
+  color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; padding: 1px 6px;
+}
+.dshuh-refresh:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+.dshuh-refresh[aria-disabled='true'] { opacity: .6; cursor: progress; }
+.dshuh-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l2); }
+.dshuh-section-head { display: flex; align-items: center; gap: 6px; }
+.dshuh-section-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
+.dshuh-status { margin-left: auto; color: var(--dsw-alias-label-tertiary); }
+.dshuh-balance-row + .dshuh-balance-row { margin-top: 6px; }
+.dshuh-balance { font-size: 20px; line-height: 28px; font-weight: 500; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.dshuh-sub { color: var(--dsw-alias-label-tertiary); }
+.dshuh-hint { margin-top: 4px; color: var(--dsw-alias-label-secondary); }
+.dshuh-detail { margin-top: 2px; font-size: 11px; color: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
+.dshuh-warn { color: var(--dsw-alias-state-warn-label, var(--dsw-alias-label-primary)); font-weight: 500; }
+.dshuh-meter { margin-top: 8px; }
+.dshuh-meter-head { display: flex; align-items: center; gap: 6px; }
+.dshuh-meter-label { color: var(--dsw-alias-label-secondary); }
+.dshuh-meter-value { margin-left: auto; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+.dshuh-track { margin-top: 4px; height: 4px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); overflow: hidden; }
+.dshuh-fill { height: 100%; border-radius: 999px; background: var(--dsw-alias-label-tertiary); }
+.dshuh-fill.dshuh-tint--a { background: var(--dsw-alias-chart-system, var(--dsw-alias-label-tertiary)); }
+.dshuh-fill.dshuh-tint--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
+.dshuh-fill.dshuh-tint--c { background: var(--dsw-alias-chart-messages, var(--dsw-alias-label-tertiary)); }
+.dshuh-reset { color: var(--dsw-alias-label-tertiary); }
+.dshuh-link { display: inline-block; margin-top: 8px; color: var(--dsw-alias-label-secondary); text-decoration: underline; }
+.dshuh-link:hover { color: var(--dsw-alias-label-primary); }
+.dshuh-error {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-secondary));
+}
+`
+
+    return {
+      inject: ['slots', 'locale'],
+      apply(ctx) {
+        ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'usage-hub: dictionaries')
+        ctx.effect(() => {
+          void load(false)
+          const timer = setInterval(() => { void load(false) }, POLL_MS)
+          return () => { clearInterval(timer) }
+        }, 'usage-hub: snapshot polling')
+        ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+          name: 'conversation.composer.dock',
+          id: 'usage-hub.reading',
+          order: 6,
+          locale: NS,
+        }, Dock))
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay',
+          id: 'usage-hub.panel',
+          order: 45,
+          locale: NS,
+        }, Panel))
+      },
+    }
+  },
+})

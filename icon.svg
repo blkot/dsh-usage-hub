@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="36" height="36" role="img" aria-label="Subscription usage">
+  <path d="M6.72 15.9 A12 12 0 0 1 29.28 15.9" fill="none" stroke="#8C9AB3" stroke-width="3" stroke-linecap="round" opacity="0.55"/>
+  <path d="M6.72 15.9 A12 12 0 0 1 21.46 8.51" fill="none" stroke="#2F6FEB" stroke-width="3" stroke-linecap="round"/>
+  <path d="M18 20 L21.46 8.51" fill="none" stroke="#2F6FEB" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="18" cy="20" r="2.4" fill="#2F6FEB"/>
+</svg>

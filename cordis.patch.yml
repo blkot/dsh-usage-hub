@@ -1,0 +1,22 @@
+# dsh-usage-hub bundle patch: adds the aggregated subscription usage reading.
+#
+# `deepseek.apiKeyEnv` names the credential the balance call authenticates with;
+# it is resolved through the harness credential store first and the process
+# environment second. `opencode.baseUrl` + `opencode.password` attach to an
+# already-running OpenCode server; leaving them empty starts the CLI named by
+# `opencode.cliPath` (empty: auto-detected install) for one read.
+- insert:
+    - id: usage-hub
+      name: 'dsh-usage-hub'
+      config:
+        cacheTtlMs: 300000
+        deepseek:
+          enabled: true
+          apiKeyEnv: DEEPSEEK_API_KEY
+          baseUrl: 'https://api.deepseek.com'
+        opencode:
+          enabled: true
+          cliPath: ''
+          baseUrl: ''
+          password: ''
+          startTimeoutMs: 25000

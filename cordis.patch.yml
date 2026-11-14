@@ -2,9 +2,13 @@
 #
 # `deepseek.apiKeyEnv` names the credential the balance call authenticates with;
 # it is resolved through the harness credential store first and the process
-# environment second. `opencode.baseUrl` + `opencode.password` attach to an
-# already-running OpenCode server; leaving them empty starts the CLI named by
-# `opencode.cliPath` (empty: auto-detected install) for one read.
+# environment second.
+#
+# `opencode.mode`: `auto` (default) uses the Go API key against the gateway and
+# falls back to a local OpenCode server; `api` uses only the API key, so no
+# OpenCode app is needed; `server` uses only a local server (`opencode.baseUrl`
+# + `opencode.password` when attaching to a running one, otherwise the CLI named
+# by `opencode.cliPath`, empty: auto-detected install).
 - insert:
     - id: usage-hub
       name: 'dsh-usage-hub'
@@ -16,6 +20,9 @@
           baseUrl: 'https://api.deepseek.com'
         opencode:
           enabled: true
+          mode: auto
+          apiKeyEnv: OPENCODE_GO_API_KEY
+          apiBaseUrl: 'https://opencode.ai/zen/go/v1'
           cliPath: ''
           baseUrl: ''
           password: ''

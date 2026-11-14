@@ -7,11 +7,15 @@
  *   - `deepseek`: GET `<baseUrl>/user/balance` on the official DeepSeek API
  *     with the API key named by `deepseek.apiKeyEnv`, resolved through the
  *     harness credential store (a stored key outranks the environment).
- *   - `opencode-go`: GET `/api/experimental/usage/limits` on a local OpenCode
- *     server. When `opencode.baseUrl` and `opencode.password` are configured it
- *     attaches to that running server; otherwise it starts the OpenCode CLI on
- *     a free loopback port, reads the printed server password, asks once, and
- *     stops the server again.
+ *   - `opencode-go`: the Go allowance. `opencode.mode: api` signs the Go API
+ *     key (`opencode.apiKeyEnv`, the same key the `opencode-go` model provider
+ *     uses) against `GET <apiBaseUrl>/usage` on the gateway, so no local
+ *     OpenCode app is required. `mode: server` instead asks
+ *     `/api/experimental/usage/limits` on a local OpenCode server — attaching
+ *     to a configured `baseUrl` + `password`, or starting the CLI on a free
+ *     loopback port and stopping it after the read — which also returns the
+ *     Console workspace and budgets. `mode: auto` prefers the API key and
+ *     falls back to the server.
  *
  * The snapshot is cached for `cacheTtlMs`; the client passes `refresh=1` for a
  * user-initiated refresh. Requests must pass the Connection trust fence.
@@ -80,6 +84,9 @@ function resolveSettings(config) {
     },
     opencode: {
       enabled: opencode.enabled !== false,
+      mode: opencode.mode === 'api' || opencode.mode === 'server' ? opencode.mode : 'auto',
+      apiKeyEnv: nonEmptyString(opencode.apiKeyEnv) ?? 'OPENCODE_GO_API_KEY',
+      apiBaseUrl: trimTrailingSlash(nonEmptyString(opencode.apiBaseUrl) ?? 'https://opencode.ai/zen/go/v1'),
       cliPath: nonEmptyString(opencode.cliPath) ?? '',
       baseUrl: trimTrailingSlash(nonEmptyString(opencode.baseUrl) ?? ''),
       password: nonEmptyString(opencode.password) ?? '',
@@ -159,7 +166,7 @@ async function snapshot(ctx, settings, state, refresh) {
 async function collect(ctx, settings) {
   const results = await Promise.all([
     guard('deepseek', 'DeepSeek API', () => deepseekUsage(ctx, settings.deepseek)),
-    guard('opencode-go', 'OpenCode Go', () => opencodeUsage(settings.opencode)),
+    guard('opencode-go', 'OpenCode Go', () => opencodeUsage(ctx, settings.opencode)),
   ])
   return { at: Date.now(), providers: results.filter((entry) => entry !== undefined) }
 }
@@ -269,12 +276,99 @@ async function resolveCredential(ctx, reference) {
 }
 
 /**
- * Read the OpenCode Go allowance and Console budgets.
+ * Read the OpenCode Go allowance.
+ *
+ * Two sources, chosen by `opencode.mode`:
+ *   - `api` signs the Go API key (the same key the `opencode-go` model provider
+ *     uses) against the gateway's usage endpoint, so no local OpenCode app is
+ *     needed;
+ *   - `server` asks a local OpenCode server, which additionally reports the
+ *     Console workspace and the Console budgets.
+ * `auto` prefers the API key and falls back to a local server.
+ *
+ * @param ctx - Host context (credential seam).
  * @param options - opencode settings.
  * @returns provider entry, or undefined when disabled.
  */
-async function opencodeUsage(options) {
+async function opencodeUsage(ctx, options) {
   if (!options.enabled) return undefined
+  const credential = await resolveCredential(ctx, options.apiKeyEnv)
+
+  if (options.mode !== 'server' && credential !== undefined) {
+    const entry = await zenUsage(options, credential)
+    if (options.mode === 'api' || entry.status === 'ok') return entry
+    // `auto`: a key the gateway refuses still leaves the local server as a
+    // second source, and its failure must not hide the key's diagnostic.
+    try {
+      return await serverUsage(options)
+    } catch {
+      return entry
+    }
+  }
+  if (options.mode === 'api') {
+    return {
+      status: 'unconfigured',
+      error: { code: 'missing-credential', message: `no credential named ${options.apiKeyEnv}` },
+    }
+  }
+  try {
+    return await serverUsage(options)
+  } catch (error) {
+    if (options.mode === 'auto' && credential === undefined && error?.code === 'cli-missing') {
+      throw coded('no-source', `neither a ${options.apiKeyEnv} credential nor a local OpenCode CLI was found`)
+    }
+    throw error
+  }
+}
+
+/**
+ * Read the allowance with the Go API key.
+ * @param options - opencode settings.
+ * @param credential - the resolved key.
+ * @returns provider entry.
+ */
+async function zenUsage(options, credential) {
+  const response = await fetch(`${options.apiBaseUrl}/usage`, {
+    method: 'GET',
+    headers: { authorization: `Bearer ${credential.value}`, accept: 'application/json' },
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    return {
+      status: 'error',
+      error: {
+        code: `http-${response.status}`,
+        message: `the OpenCode usage endpoint answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+      },
+    }
+  }
+
+  const body = await response.json().catch(() => undefined)
+  const usage = isRecord(body?.usage) ? body.usage : isRecord(body?.data) ? body.data : body
+  const allowance = {
+    rolling: windowOf(usage?.rolling),
+    weekly: windowOf(usage?.weekly),
+    monthly: windowOf(usage?.monthly),
+  }
+  if (allowance.rolling === undefined && allowance.weekly === undefined && allowance.monthly === undefined) {
+    return {
+      status: 'error',
+      error: {
+        code: 'unexpected-payload',
+        message: `the usage endpoint returned no allowance window: ${clip(JSON.stringify(body ?? null))}`,
+      },
+    }
+  }
+  return { status: 'ok', source: 'api-key', credentialSource: credential.source, allowance }
+}
+
+/**
+ * Read the allowance, workspace, and budgets from a local OpenCode server.
+ * @param options - opencode settings.
+ * @returns provider entry.
+ */
+async function serverUsage(options) {
   const server = await acquireServer(options)
   try {
     const response = await fetch(`${server.url}${OPENCODE_LIMITS_PATH}`, {
@@ -355,6 +449,9 @@ async function acquireServer(options) {
     return await waitForServer(child, options.startTimeoutMs)
   } catch (error) {
     stopServer({ child })
+    if (error?.code === 'ENOENT') {
+      throw coded('cli-missing', `the OpenCode CLI "${cli}" was not found; set opencode.cliPath in the bundle configuration`)
+    }
     throw error
   }
 }
@@ -466,16 +563,42 @@ function freePort() {
 
 /**
  * Normalize one allowance window.
+ *
+ * The Console route reports `{ percent, limited, resetsAt }` with an epoch
+ * millisecond `resetsAt`; the gateway usage endpoint reports
+ * `{ status, percent, resetsAt }` and may spell the reset as an ISO instant.
+ * Both normalize here.
+ *
  * @param value - raw window.
  * @returns normalized window, or undefined.
  */
 function windowOf(value) {
   if (!isRecord(value)) return undefined
+  const percent = Number(value.percent ?? 0)
+  const status = typeof value.status === 'string' ? value.status.toLowerCase() : ''
   return {
-    percent: Number(value.percent ?? 0),
-    limited: value.limited === true,
-    resetsAt: Number(value.resetsAt ?? 0),
+    percent: Number.isFinite(percent) ? percent : 0,
+    limited: value.limited === true
+      || status === 'limited'
+      || status === 'exhausted'
+      || (status !== '' && status !== 'ok' && status !== 'active' && percent >= 100),
+    resetsAt: instantOf(value.resetsAt),
   }
+}
+
+/**
+ * Read one reset instant as epoch milliseconds.
+ * @param value - epoch milliseconds, a numeric string, or an ISO instant.
+ * @returns epoch milliseconds, or 0.
+ */
+function instantOf(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value !== '') {
+    if (/^\d+$/.test(value)) return Number(value)
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  return 0
 }
 
 /**

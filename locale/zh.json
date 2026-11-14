@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "用量总览",
-    "description": "在输入框下方加入两处用量读数（DeepSeek API 余额与 OpenCode Go 额度），点任一读数打开明细面板。DeepSeek 通过 GET /user/balance 读取，密钥取本插件配置里 deepseek.apiKeyEnv 指定的凭据（先查凭据库，再查进程环境变量）。OpenCode Go 通过本地 OpenCode server 读取：插件会临时启动 CLI 取一次数据再关掉，也可以用 opencode.baseUrl 和 opencode.password 直接连已有 server。面板里给出余额拆分、滚动/每周/每月额度条与重置时间，以及刷新按钮。快照缓存 5 分钟（cacheTtlMs），刷新会联网请求两家服务；停用本插件会移除读数并停止这些请求。"
+    "description": "在输入框下方加入两处用量读数（DeepSeek API 余额与 OpenCode Go 额度），点任一读数打开明细面板。DeepSeek 通过 GET /user/balance 读取，密钥取 deepseek.apiKeyEnv 指定的凭据（先查凭据库，再查进程环境变量）。OpenCode Go 默认用 API Key 直接请求网关的 /zen/go/v1/usage，也就是模型里配好的那把 opencode-go 密钥，不需要安装或登录 OpenCode 桌面端；把 opencode.mode 设成 server 则改为询问本地 OpenCode server，可以额外拿到 Console 工作区和预算。面板里给出余额拆分、滚动/每周/每月额度条与重置时间，以及刷新按钮。快照缓存 5 分钟（cacheTtlMs），刷新会联网请求两家服务；停用本插件会移除读数并停止这些请求。"
   }
 }

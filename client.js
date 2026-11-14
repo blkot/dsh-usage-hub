@@ -43,7 +43,8 @@ window.__ModuleLoader__.load({
       'opencode.hint': 'Sign in to the OpenCode Console with the desktop app, or start a server and configure its address.',
       'hint.missingCredential': 'No API key is set for this bundle. Add it in Settings → Models, then refresh.',
       'hint.notSignedIn': 'The OpenCode Console workspace is unknown. Sign in with the OpenCode desktop app, then refresh.',
-      'hint.cliMissing': 'The OpenCode CLI was not found. Set opencode.cliPath in this bundle configuration.',
+      'hint.cliMissing': 'The OpenCode CLI was not found. Set opencode.cliPath in this bundle configuration, or configure the opencode-go API key so no CLI is needed.',
+      'hint.noSource': 'No OpenCode credential was found. Set the opencode-go API key (OPENCODE_GO_API_KEY) in Settings → Models, or install and sign in to the OpenCode desktop app.',
       'common.na': '—',
     }
 
@@ -77,7 +78,8 @@ window.__ModuleLoader__.load({
       'opencode.hint': '请先用桌面端登录 OpenCode Console，或启动一个 server 并在配置里填它的地址。',
       'hint.missingCredential': '本插件指定的 API Key 还没配置，请在「设置 → 模型」里填好后刷新。',
       'hint.notSignedIn': '没有找到已登录的 OpenCode Console 工作区，请先用桌面端登录后刷新。',
-      'hint.cliMissing': '没找到 OpenCode CLI，请在本插件配置里填写 opencode.cliPath。',
+      'hint.cliMissing': '没找到 OpenCode CLI：可以先在本插件配置里填 opencode.cliPath，或直接配置 opencode-go 的 API Key（这样就不需要 CLI）。',
+      'hint.noSource': '没有可用的 OpenCode 凭据：请在「设置 → 模型」里配置 opencode-go 的 API Key（OPENCODE_GO_API_KEY），或安装并登录 OpenCode 桌面端。',
       'common.na': '—',
     }
 
@@ -213,6 +215,7 @@ window.__ModuleLoader__.load({
       if (code === 'missing-credential') return t('hint.missingCredential')
       if (code === 'not-signed-in') return t('hint.notSignedIn')
       if (code === 'cli-missing') return t('hint.cliMissing')
+      if (code === 'no-source') return t('hint.noSource')
       return undefined
     }
 

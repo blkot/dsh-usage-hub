@@ -20,7 +20,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
 
 - **DeepSeek** — `GET https://api.deepseek.com/user/balance` with the credential named by `deepseek.apiKeyEnv` (default `DEEPSEEK_API_KEY`), resolved through the harness credential store first and the process environment second. DeepSeek publishes no official per-key spend endpoint; the private platform dashboard endpoints need a signed-in web session, so the balance is what this plugin can honestly show.
 - **OpenCode Go** — two possible sources, chosen by `opencode.mode`:
-  - **`api` (the `auto` default)** — `GET https://opencode.ai/zen/go/v1/usage` with the Go API key named by `opencode.apiKeyEnv` (default `OPENCODE_GO_API_KEY`), which is the same key the `opencode-go` model provider uses. Nothing else needs to be installed, so this works on any machine that can already talk to the provider. It returns the rolling/weekly/monthly percentages and their reset instants.
+  - **`api` (the `auto` default)** — `GET https://opencode.ai/zen/go/v1/usage` with the Go API key named by `opencode.apiKeyEnv` (default `OPENCODE_GO_API_KEY`), which is the same key the `opencode-go` model provider uses. If that reference is unset, the key is also read from the record the pi-ai adapter writes on provider sign-in (`credentialRecord`, default `llm-pi-ai/opencode-go`). Nothing else needs to be installed, so this works on any machine that can already talk to the provider. It returns the rolling/weekly/monthly percentages and their reset instants.
   - **`server`** — `GET /api/experimental/usage/limits` on a local OpenCode server: the plugin attaches to a server you configure (`opencode.baseUrl` + `opencode.password`), or starts the CLI on a free loopback port, reads its printed password, asks once, and stops it again. This also reports the Console workspace name, the usage-page link and Console budgets.
 
   `auto` uses the API key when it resolves and falls back to a local server otherwise; `api` never starts a process; `server` never uses the key.
@@ -41,6 +41,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
           enabled: true
           mode: auto                # auto | api | server
           apiKeyEnv: OPENCODE_GO_API_KEY
+          credentialRecord: 'llm-pi-ai/opencode-go'   # second source for the key
           apiBaseUrl: 'https://opencode.ai/zen/go/v1'
           cliPath: ''               # server mode: empty: auto-detect the desktop install
           baseUrl: ''               # server mode: fill with password to attach to a running server

@@ -37,6 +37,11 @@ const FETCH_TIMEOUT_MS = 20 * 1000
 const DEFAULT_START_TIMEOUT_MS = 25 * 1000
 /** Route in the OpenCode server the Go allowance is read from. */
 const OPENCODE_LIMITS_PATH = '/api/experimental/usage/limits'
+/**
+ * Where the pi-ai adapter stores a provider key signed in through its own
+ * flow; read as a second source when the named reference is unset.
+ */
+const DEFAULT_OPENCODE_RECORD = 'llm-pi-ai/opencode-go'
 
 /** Host services this plugin needs before it activates. */
 export const inject = ['webServer', 'connection']
@@ -86,6 +91,7 @@ function resolveSettings(config) {
       enabled: opencode.enabled !== false,
       mode: opencode.mode === 'api' || opencode.mode === 'server' ? opencode.mode : 'auto',
       apiKeyEnv: nonEmptyString(opencode.apiKeyEnv) ?? 'OPENCODE_GO_API_KEY',
+      credentialRecord: nonEmptyString(opencode.credentialRecord) ?? DEFAULT_OPENCODE_RECORD,
       apiBaseUrl: trimTrailingSlash(nonEmptyString(opencode.apiBaseUrl) ?? 'https://opencode.ai/zen/go/v1'),
       cliPath: nonEmptyString(opencode.cliPath) ?? '',
       baseUrl: trimTrailingSlash(nonEmptyString(opencode.baseUrl) ?? ''),
@@ -239,13 +245,14 @@ async function deepseekUsage(ctx, options) {
 }
 
 /**
- * Resolve one credential reference through the harness seam, then the process
- * environment.
+ * Resolve one credential reference through the harness seam, then a provider
+ * record the pi-ai adapter may have written, then the process environment.
  * @param ctx - Host context.
  * @param reference - credential reference name.
+ * @param recordKey - optional `llm-pi-ai/<provider>` record to fall back to.
  * @returns `{ value, source }`, or undefined when nothing is set.
  */
-async function resolveCredential(ctx, reference) {
+async function resolveCredential(ctx, reference, recordKey) {
   let credentials
   try {
     credentials = ctx.get('credentials')
@@ -267,7 +274,17 @@ async function resolveCredential(ctx, reference) {
         return { value: hit.value, source: String(hit.source ?? 'store') }
       }
     } catch {
-      // A seam failure falls through to the environment.
+      // A seam failure falls through to the record and the environment.
+    }
+    if (typeof recordKey === 'string' && recordKey !== '' && typeof credentials.readRecord === 'function') {
+      try {
+        const record = await credentials.readRecord(recordKey)
+        if (record !== undefined && record !== null && typeof record.key === 'string' && record.key !== '') {
+          return { value: record.key, source: 'record' }
+        }
+      } catch {
+        // Nothing stored under that record.
+      }
     }
   }
   const ambient = process.env[reference]
@@ -292,7 +309,7 @@ async function resolveCredential(ctx, reference) {
  */
 async function opencodeUsage(ctx, options) {
   if (!options.enabled) return undefined
-  const credential = await resolveCredential(ctx, options.apiKeyEnv)
+  const credential = await resolveCredential(ctx, options.apiKeyEnv, options.credentialRecord)
 
   if (options.mode !== 'server' && credential !== undefined) {
     const entry = await zenUsage(options, credential)

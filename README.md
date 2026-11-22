@@ -59,7 +59,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
 
 ## Network and proxies
 
-Every outgoing read goes through `proxy`. The default, `system`, resolves `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` first and then the Windows per-user proxy (`Internet Settings`); `''` forces a direct connection, and a URL pins one proxy. Loopback targets always bypass the proxy, so a local OpenCode server is never handed to it, and a system proxy that cannot be reached degrades to a direct call instead of failing the reading.
+Every outgoing read goes through `proxy`. The default, `system`, resolves `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` first and then the platform proxy: the Windows per-user proxy (`Internet Settings`) or, on macOS, the SystemConfiguration proxy reported by `scutil --proxy` (HTTPS first, then HTTP). Linux relies on the environment variables. A SOCKS-only or PAC setup is not tunnelled — set `proxy` to an HTTP proxy URL in that case. `''` forces a direct connection, and a URL pins one proxy. Loopback targets always bypass the proxy, so a local OpenCode server is never handed to it, and a system proxy that cannot be reached degrades to a direct call instead of failing the reading.
 
 This matters wherever `chatgpt.com` — the Codex backend — is only reachable through a proxy, which is the usual case on a network that blocks it: without a proxy the Codex read fails while DeepSeek and the OpenCode gateway still work.
 

@@ -360,7 +360,11 @@ async function resolveProxy(option) {
   if (systemProxyCache !== undefined && now - systemProxyCache.at < SYSTEM_PROXY_TTL_MS) {
     return systemProxyCache.value
   }
-  const value = await windowsSystemProxy()
+  const value = process.platform === 'win32'
+    ? await windowsSystemProxy()
+    : process.platform === 'darwin'
+      ? await macosSystemProxy()
+      : undefined
   systemProxyCache = { at: now, value }
   return value
 }
@@ -390,6 +394,48 @@ function windowsSystemProxy() {
       },
     )
   })
+}
+
+/**
+ * The macOS system proxy, when one is enabled for HTTPS or HTTP traffic.
+ * A GUI proxy toggle (ClashX, Surge, …) lives in SystemConfiguration rather
+ * than the environment, which is why it is asked for explicitly.
+ * @returns proxy URL, or undefined.
+ */
+function macosSystemProxy() {
+  return new Promise((resolve) => {
+    execFile('scutil', ['--proxy'], { timeout: 5000 }, (error, stdout) => {
+      if (error !== null) {
+        resolve(undefined)
+        return
+      }
+      resolve(parseScutilProxy(stdout))
+    })
+  })
+}
+
+/**
+ * Parse `scutil --proxy` output into a proxy URL.
+ *
+ * HTTPS wins over HTTP, because this transport tunnels TLS. A SOCKS-only or
+ * PAC setup is left alone: the tunnel speaks HTTP CONNECT.
+ *
+ * @param text - command output.
+ * @returns proxy URL, or undefined.
+ */
+function parseScutilProxy(text) {
+  const value = (key) => {
+    const match = new RegExp(`^\\s*${key}\\s*:\\s*(\\S+)\\s*$`, 'm').exec(text)
+    return match === null ? undefined : match[1]
+  }
+  for (const scheme of ['HTTPS', 'HTTP']) {
+    if (value(`${scheme}Enable`) !== '1') continue
+    const host = value(`${scheme}Proxy`)
+    const port = value(`${scheme}Port`)
+    if (host === undefined || port === undefined) continue
+    return normaliseProxy(`${host}:${port}`)
+  }
+  return undefined
 }
 
 /**

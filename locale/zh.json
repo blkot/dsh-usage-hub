@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "用量总览",
-    "description": "在输入框下方加入用量读数（DeepSeek API 余额、OpenCode Go 额度、Codex 订阅限额），点任一读数打开明细面板。DeepSeek 通过 GET /user/balance 读取，密钥取 deepseek.apiKeyEnv 指定的凭据（先查凭据库，再查进程环境变量）。OpenCode Go 默认用 API Key 直接请求网关的 /zen/go/v1/usage，也就是模型里配好的那把 opencode-go 密钥，不需要安装或登录 OpenCode 桌面端；把 opencode.mode 设成 server 则改为询问本地 OpenCode server，可以额外拿到 Console 工作区和预算。Codex 用 Codex CLI 自己保存在 auth.json 里的 OAuth 令牌请求 chatgpt.com/backend-api/wham/usage，因此只能读订阅限额（5 小时会话与每周上限）以及套餐、credits，和存下来的重置次数（展开可看到每一次的到期时间；收起时用彩色电池格表示紧迫程度：超过 7 天蓝、7 天内绿、3 天内橙；渠道身份改用标题颜色区分，不再用圆点），机器上没有该文件就不显示这一项。面板里给出余额拆分、额度条与重置时间，以及刷新按钮。快照缓存 5 分钟（cacheTtlMs），刷新会联网请求各家服务；停用本插件会移除读数并停止这些请求。 所有出站请求都走 proxy 配置（默认 system：先读 HTTPS_PROXY/ALL_PROXY，再用系统代理（Windows 注册表 / macOS scutil）；本机回环始终直连，代理连不通时回退直连）。"
+    "description": "在输入框下方加入用量读数（DeepSeek API 余额、OpenCode Go 额度、Codex 订阅限额），点任一读数打开明细面板。DeepSeek 通过 GET /user/balance 读取，密钥取 deepseek.apiKeyEnv 指定的凭据（先查凭据库，再查进程环境变量）。OpenCode Go 默认用 API Key 直接请求网关的 /zen/go/v1/usage，也就是模型里配好的那把 opencode-go 密钥，不需要安装或登录 OpenCode 桌面端；把 opencode.mode 设成 server 则改为询问本地 OpenCode server，可以额外拿到 Console 工作区和预算。Codex 用 Codex CLI 自己保存在 auth.json 里的 OAuth 令牌请求 chatgpt.com/backend-api/wham/usage，因此只能读订阅限额（5 小时会话与每周上限）以及套餐、credits，和存下来的重置次数（展开可看到每一次的到期时间；收起时用彩色电池格表示紧迫程度：超过 7 天蓝、7 天内绿、3 天内橙；渠道身份改用各家官方标志（simple-icons，单色随主题）），机器上没有该文件就不显示这一项。面板里给出余额拆分、额度条与重置时间，以及刷新按钮。快照缓存 5 分钟（cacheTtlMs），刷新会联网请求各家服务；停用本插件会移除读数并停止这些请求。 所有出站请求都走 proxy 配置（默认 system：先读 HTTPS_PROXY/ALL_PROXY，再用系统代理（Windows 注册表 / macOS scutil）；本机回环始终直连，代理连不通时回退直连）。"
   }
 }

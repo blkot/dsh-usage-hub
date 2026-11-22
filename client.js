@@ -270,7 +270,7 @@ window.__ModuleLoader__.load({
       const path = BRAND_PATHS[id]
       if (path === undefined) return null
       return h('svg', {
-        className: 'dshuh-icon',
+        className: `dshuh-icon dshuh-icon--${id}`,
         width: size,
         height: size,
         viewBox: '0 0 24 24',
@@ -718,6 +718,15 @@ window.__ModuleLoader__.load({
 }
 .dshuh-pill--warn { color: var(--dsw-alias-label-tertiary); }
 .dshuh-icon { flex: none; display: block; }
+/* Brand marks in their owners' colours, tuned for a light surface. */
+.dshuh-icon--deepseek { color: #5786fe; }
+.dshuh-icon--opencode-go { color: #12161c; }
+.dshuh-icon--codex { color: #10a37f; }
+/* The same marks on the dark surface: DeepSeek lightens, the monochrome
+   OpenCode mark inverts, and the OpenAI green lifts so it keeps its contrast. */
+body[data-ds-dark-theme] .dshuh-icon--deepseek { color: #7fa2ff; }
+body[data-ds-dark-theme] .dshuh-icon--opencode-go { color: #eef1f6; }
+body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
 .dshuh-panel {
   position: fixed; z-index: 1100; box-sizing: border-box;
   padding: 12px; border: 0; border-radius: var(--dsw-radius-lg);

@@ -699,7 +699,15 @@ window.__ModuleLoader__.load({
 
     /** Scoped styles; theme tokens only, so light and dark both inherit. */
     const CSS = `
-.dshuh-root { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+/* The host centres the dock row on its content, so a reading that should sit
+   at the composer's right edge needs the row itself to span the composer
+   width. The data attribute is the host's own marker on that row; if a future
+   host drops it, this rule simply stops applying and the row stays centred. */
+[data-composer-dock] { width: 100%; justify-content: flex-end; }
+.dshuh-root {
+  display: inline-flex; align-items: center; gap: 2px; flex: none;
+  order: 1; /* after the host's own context meter, i.e. last at the right edge */
+}
 .dshuh-pill {
   display: inline-flex; align-items: center; gap: 6px; flex: none;
   padding: 1px 8px; border: none; border-radius: var(--dsw-radius-sm);

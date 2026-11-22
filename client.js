@@ -262,20 +262,78 @@ window.__ModuleLoader__.load({
       return h('span', { className: `dshuh-dot${state}`, 'aria-hidden': true })
     }
 
+    /** Milliseconds in a day, for the expiry tone thresholds. */
+    const DAY_MS = 24 * 60 * 60 * 1000
+    /** How many credit rings the dock shows before it summarizes the rest. */
+    const CREDIT_RING_LIMIT = 5
+
+    /** The banked reset items of one provider entry. */
+    function creditsOf(entry) {
+      const reset = entry?.resetCredits
+      return Array.isArray(reset?.items) ? reset.items : []
+    }
+
+    /**
+     * Tone for one credit expiry: more than a week out is blue, within a week
+     * green, within three days orange, and a credit with no expiry is muted.
+     * @param expiresAt - epoch milliseconds, or 0 when the backend sent none.
+     * @param now - current epoch milliseconds.
+     * @returns tone class suffix.
+     */
+    function creditTone(expiresAt, now) {
+      if (expiresAt === 0) return 'dshuh-credit--muted'
+      const left = expiresAt - now
+      if (left > 7 * DAY_MS) return 'dshuh-credit--blue'
+      if (left > 3 * DAY_MS) return 'dshuh-credit--green'
+      return 'dshuh-credit--orange'
+    }
+
+    /**
+     * One ring per banked reset, coloured by how soon it expires.
+     *
+     * Rings rather than filled discs: the filled disc is already the channel
+     * marker on every reading, so a second filled dot would read as another
+     * channel instead of a credit.
+     */
+    function CreditDots(props) {
+      const { t, items } = props
+      const now = Date.now()
+      const shown = items.slice(0, CREDIT_RING_LIMIT)
+      return h('span', {
+        className: 'dshuh-credits',
+        role: 'img',
+        'aria-label': t('codex.resetCredits', { count: items.length }),
+        title: t('codex.resetCredits', { count: items.length }),
+      },
+        shown.map((item, index) => h('span', {
+          key: item.id === '' ? String(index) : item.id,
+          className: `dshuh-credit ${creditTone(item.expiresAt, now)}`,
+        })),
+        items.length > CREDIT_RING_LIMIT
+          ? h('span', { className: 'dshuh-credit-more' }, `+${items.length - CREDIT_RING_LIMIT}`)
+          : null,
+      )
+    }
+
     /** One pill button with a provider reading. */
     function Pill(props) {
       const { t, entry, onClick, open } = props
+      const credits = entry?.id === 'codex' ? creditsOf(entry) : []
       return h('button', {
         type: 'button',
         className: `dshuh-pill${pillTone(entry)}`,
         'aria-haspopup': 'dialog',
         'aria-expanded': open,
         'aria-controls': PANEL_ID,
-        'aria-label': entry === undefined ? t('panel.never') : `${entry.label}: ${pillText(t, entry)}`,
+        'aria-label': entry === undefined
+          ? t('panel.never')
+          : `${entry.label}: ${pillText(t, entry)}${credits.length === 0 ? '' : `, ${t('codex.resetCredits', { count: credits.length })}`}`,
         onClick,
       },
         h(Dot, { entry, tone: entry?.id === 'deepseek' ? 'a' : entry?.id === 'codex' ? 'c' : 'b' }),
         h('span', null, pillText(t, entry)),
+        credits.length === 0 ? null : h('span', { className: 'dshuh-divider', 'aria-hidden': true }),
+        credits.length === 0 ? null : h(CreditDots, { t, items: credits }),
       )
     }
 
@@ -432,6 +490,7 @@ window.__ModuleLoader__.load({
           onClick: () => { setOpen(!open) },
         },
           h('span', null, t('codex.resetCredits', { count })),
+          open || items.length === 0 ? null : h(CreditDots, { t, items }),
           h('span', { className: 'dshuh-caret', 'aria-hidden': true }, open ? '▾' : '▸'),
         ),
         open
@@ -682,6 +741,22 @@ window.__ModuleLoader__.load({
 }
 .dshuh-banked-toggle:hover { color: var(--dsw-alias-label-primary); }
 .dshuh-caret { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
+.dshuh-divider {
+  width: 1px; height: 10px; flex: none; margin: 0 2px;
+  background: var(--dsw-alias-border-l2);
+}
+/* Banked credits are rings, not discs: the filled disc is the channel marker. */
+.dshuh-credits { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.dshuh-credit {
+  box-sizing: border-box; width: 5px; height: 5px; flex: none;
+  border-radius: 999px; border: 1.5px solid currentColor; background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+}
+.dshuh-credit--blue { color: var(--dsw-alias-chart-messages, var(--dsw-alias-label-secondary)); }
+.dshuh-credit--green { color: var(--dsw-alias-state-success-primary, var(--dsw-alias-label-secondary)); }
+.dshuh-credit--orange { color: var(--dsw-alias-state-warn-primary, var(--dsw-alias-label-secondary)); }
+.dshuh-credit--muted { color: var(--dsw-alias-border-l3); }
+.dshuh-credit-more { font-size: 11px; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 .dshuh-banked-list { margin: 4px 0 0; padding: 0 0 0 14px; list-style: none; }
 .dshuh-banked-item {
   display: flex; align-items: baseline; justify-content: space-between; gap: 12px;

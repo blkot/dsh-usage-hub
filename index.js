@@ -21,10 +21,13 @@
  * user-initiated refresh. Requests must pass the Connection trust fence.
  */
 
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
+import tls from 'node:tls'
 import { homedir } from 'node:os'
 import path from 'node:path'
 
@@ -82,12 +85,15 @@ function resolveSettings(config) {
   const deepseek = isRecord(config.deepseek) ? config.deepseek : {}
   const opencode = isRecord(config.opencode) ? config.opencode : {}
   const codex = isRecord(config.codex) ? config.codex : {}
+  // `system` resolves HTTPS_PROXY/ALL_PROXY, then the Windows system proxy.
+  const proxy = nonEmptyString(config.proxy) ?? 'system'
   return {
     cacheTtlMs: positiveInteger(config.cacheTtlMs, DEFAULT_TTL_MS),
     deepseek: {
       enabled: deepseek.enabled !== false,
       apiKeyEnv: nonEmptyString(deepseek.apiKeyEnv) ?? 'DEEPSEEK_API_KEY',
       baseUrl: trimTrailingSlash(nonEmptyString(deepseek.baseUrl) ?? 'https://api.deepseek.com'),
+      proxy: nonEmptyString(deepseek.proxy) ?? proxy,
     },
     opencode: {
       enabled: opencode.enabled !== false,
@@ -99,11 +105,13 @@ function resolveSettings(config) {
       baseUrl: trimTrailingSlash(nonEmptyString(opencode.baseUrl) ?? ''),
       password: nonEmptyString(opencode.password) ?? '',
       startTimeoutMs: positiveInteger(opencode.startTimeoutMs, DEFAULT_START_TIMEOUT_MS),
+      proxy: nonEmptyString(opencode.proxy) ?? proxy,
     },
     codex: {
       enabled: codex.enabled !== false,
       authPath: nonEmptyString(codex.authPath) ?? '',
       baseUrl: trimTrailingSlash(nonEmptyString(codex.baseUrl) ?? 'https://chatgpt.com/backend-api'),
+      proxy: nonEmptyString(codex.proxy) ?? proxy,
     },
   }
 }
@@ -205,6 +213,234 @@ async function guard(id, label, read) {
   return { id, label, ...entry }
 }
 
+/** Cache for the Windows system-proxy lookup. */
+let systemProxyCache
+/** How long one system-proxy lookup stays fresh. */
+const SYSTEM_PROXY_TTL_MS = 60 * 1000
+
+/**
+ * Read one endpoint, through the configured proxy when there is one.
+ *
+ * Loopback targets always go direct: a local OpenCode server must never be
+ * handed to the user's HTTP proxy. A system proxy that cannot be reached
+ * degrades to a direct call, because a stale proxy setting should not take a
+ * reading down when the host is reachable anyway.
+ *
+ * @param url - absolute URL.
+ * @param headers - request headers.
+ * @param proxyOption - '' for direct, 'system', or a proxy URL.
+ * @returns `{ status, text }`.
+ */
+async function readJson(url, headers, proxyOption) {
+  const target = new URL(url)
+  if (proxyOption === '' || isLoopback(target.hostname)) return fetchText(url, headers)
+  const proxy = await resolveProxy(proxyOption)
+  if (proxy === undefined) return fetchText(url, headers)
+  try {
+    return await tunnelText(target, headers, proxy)
+  } catch (error) {
+    if (proxyOption === 'system') return fetchText(url, headers)
+    throw coded('network', `${target.host} is unreachable through ${proxy}: ${reasonOf(error)}`)
+  }
+}
+
+/**
+ * One plain request.
+ * @param url - absolute URL.
+ * @param headers - request headers.
+ * @returns `{ status, text }`.
+ */
+async function fetchText(url, headers) {
+  const response = await fetch(url, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  return { status: response.status, text: await response.text().catch(() => '') }
+}
+
+/**
+ * An https Agent that rides an already-established TLS socket, so a CONNECT
+ * tunnel can carry an ordinary request whose framing Node still parses.
+ */
+class TunnelAgent extends https.Agent {
+  /**
+   * @param socket - the TLS socket built on the proxy tunnel.
+   */
+  constructor(socket) {
+    super({ keepAlive: false, maxSockets: 1 })
+    this.socket = socket
+  }
+
+  /** @returns the tunneled socket for this one request. */
+  createConnection() {
+    return this.socket
+  }
+}
+
+/**
+ * One request through an HTTP CONNECT tunnel.
+ * @param target - parsed target URL.
+ * @param headers - request headers.
+ * @param proxy - proxy URL.
+ * @returns `{ status, text }`.
+ */
+function tunnelText(target, headers, proxy) {
+  const proxyUrl = new URL(proxy)
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(error)
+    }
+    const timer = setTimeout(() => {
+      fail(new Error(`the proxy did not answer within ${FETCH_TIMEOUT_MS} ms`))
+    }, FETCH_TIMEOUT_MS)
+
+    const proxyAuth = proxyUrl.username === ''
+      ? {}
+      : {
+        'proxy-authorization': `Basic ${Buffer.from(`${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password)}`).toString('base64')}`,
+      }
+    const connect = http.request({
+      host: proxyUrl.hostname,
+      port: Number(proxyUrl.port === '' ? 80 : proxyUrl.port),
+      method: 'CONNECT',
+      path: `${target.hostname}:${target.port === '' ? 443 : target.port}`,
+      headers: proxyAuth,
+    })
+    connect.once('error', fail)
+    connect.once('connect', (answer, socket) => {
+      if (answer.statusCode !== 200) {
+        socket.destroy()
+        fail(new Error(`the proxy refused CONNECT with HTTP ${answer.statusCode}`))
+        return
+      }
+      const secure = tls.connect({ socket, servername: target.hostname })
+      secure.once('error', fail)
+      const request = https.request({
+        host: target.hostname,
+        port: Number(target.port === '' ? 443 : target.port),
+        path: `${target.pathname}${target.search}`,
+        method: 'GET',
+        headers: { ...headers, connection: 'close' },
+        agent: new TunnelAgent(secure),
+      }, (response) => {
+        const chunks = []
+        response.on('data', (chunk) => chunks.push(chunk))
+        response.once('error', fail)
+        response.once('end', () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          resolve({ status: response.statusCode ?? 0, text: Buffer.concat(chunks).toString('utf8') })
+        })
+      })
+      request.once('error', fail)
+      request.end()
+    })
+    connect.end()
+  })
+}
+
+/**
+ * Resolve the proxy option into a proxy URL, if any.
+ * @param option - 'system' or an explicit proxy URL.
+ * @returns proxy URL, or undefined for a direct call.
+ */
+async function resolveProxy(option) {
+  if (option !== 'system') return normaliseProxy(option)
+  for (const name of ['HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy']) {
+    const proxy = normaliseProxy(process.env[name])
+    if (proxy !== undefined) return proxy
+  }
+  const now = Date.now()
+  if (systemProxyCache !== undefined && now - systemProxyCache.at < SYSTEM_PROXY_TTL_MS) {
+    return systemProxyCache.value
+  }
+  const value = await windowsSystemProxy()
+  systemProxyCache = { at: now, value }
+  return value
+}
+
+/**
+ * The Windows per-user proxy, when it is enabled.
+ * @returns proxy URL, or undefined.
+ */
+function windowsSystemProxy() {
+  if (process.platform !== 'win32') return Promise.resolve(undefined)
+  return new Promise((resolve) => {
+    execFile(
+      'reg.exe',
+      ['query', 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings'],
+      { windowsHide: true, timeout: 5000 },
+      (error, stdout) => {
+        if (error !== null) {
+          resolve(undefined)
+          return
+        }
+        if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(stdout)) {
+          resolve(undefined)
+          return
+        }
+        const server = /ProxyServer\s+REG_SZ\s+(\S+)/i.exec(stdout)
+        resolve(server === null ? undefined : normaliseProxy(server[1]))
+      },
+    )
+  })
+}
+
+/**
+ * Normalize a proxy spelling into a URL.
+ * @param value - `host:port`, `http://host:port`, or `https=h:p;http=h:p`.
+ * @returns proxy URL, or undefined.
+ */
+function normaliseProxy(value) {
+  if (typeof value !== 'string') return undefined
+  let text = value.trim()
+  if (text === '') return undefined
+  if (text.includes('=')) {
+    const parts = {}
+    for (const part of text.split(';')) {
+      const index = part.indexOf('=')
+      if (index > 0) parts[part.slice(0, index).trim().toLowerCase()] = part.slice(index + 1).trim()
+    }
+    text = parts.https ?? parts.http ?? ''
+  }
+  if (text === '') return undefined
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) text = `http://${text}`
+  try {
+    return new URL(text).toString()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether a host must bypass any proxy.
+ * @param hostname - target host.
+ * @returns true for a loopback name or address.
+ */
+function isLoopback(hostname) {
+  const host = hostname.toLowerCase()
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.localhost')
+}
+
+/**
+ * Parse a JSON body without throwing.
+ * @param text - raw body.
+ * @returns parsed value, or undefined.
+ */
+function parseJson(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Read the DeepSeek account balance.
  * @param ctx - Host context (credential seam).
@@ -221,23 +457,21 @@ async function deepseekUsage(ctx, options) {
     }
   }
 
-  const response = await fetch(`${options.baseUrl}/user/balance`, {
-    method: 'GET',
-    headers: { authorization: `Bearer ${credential.value}`, accept: 'application/json' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  })
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
+  const answer = await readJson(`${options.baseUrl}/user/balance`, {
+    authorization: `Bearer ${credential.value}`,
+    accept: 'application/json',
+  }, options.proxy)
+  if (answer.status < 200 || answer.status >= 300) {
     return {
       status: 'error',
       error: {
-        code: `http-${response.status}`,
-        message: `DeepSeek answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+        code: `http-${answer.status}`,
+        message: `DeepSeek answered HTTP ${answer.status}${answer.text === '' ? '' : `: ${clip(answer.text)}`}`,
       },
     }
   }
 
-  const body = await response.json()
+  const body = parseJson(answer.text)
   const balances = Array.isArray(body?.balance_infos) ? body.balance_infos : []
   return {
     status: 'ok',
@@ -353,23 +587,21 @@ async function opencodeUsage(ctx, options) {
  * @returns provider entry.
  */
 async function zenUsage(options, credential) {
-  const response = await fetch(`${options.apiBaseUrl}/usage`, {
-    method: 'GET',
-    headers: { authorization: `Bearer ${credential.value}`, accept: 'application/json' },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  })
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
+  const answer = await readJson(`${options.apiBaseUrl}/usage`, {
+    authorization: `Bearer ${credential.value}`,
+    accept: 'application/json',
+  }, options.proxy)
+  if (answer.status < 200 || answer.status >= 300) {
     return {
       status: 'error',
       error: {
-        code: `http-${response.status}`,
-        message: `the OpenCode usage endpoint answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+        code: `http-${answer.status}`,
+        message: `the OpenCode usage endpoint answered HTTP ${answer.status}${answer.text === '' ? '' : `: ${clip(answer.text)}`}`,
       },
     }
   }
 
-  const body = await response.json().catch(() => undefined)
+  const body = parseJson(answer.text)
   const usage = isRecord(body?.usage) ? body.usage : isRecord(body?.data) ? body.data : body
   const allowance = {
     rolling: windowOf(usage?.rolling),
@@ -396,23 +628,21 @@ async function zenUsage(options, credential) {
 async function serverUsage(options) {
   const server = await acquireServer(options)
   try {
-    const response = await fetch(`${server.url}${OPENCODE_LIMITS_PATH}`, {
-      method: 'GET',
-      headers: { authorization: basicAuth('opencode', server.password), accept: 'application/json' },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    })
-    if (!response.ok) {
-      const detail = await response.text().catch(() => '')
+    const answer = await readJson(`${server.url}${OPENCODE_LIMITS_PATH}`, {
+      authorization: basicAuth('opencode', server.password),
+      accept: 'application/json',
+    }, options.proxy)
+    if (answer.status < 200 || answer.status >= 300) {
       return {
         status: 'error',
         error: {
-          code: `http-${response.status}`,
-          message: `OpenCode answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+          code: `http-${answer.status}`,
+          message: `OpenCode answered HTTP ${answer.status}${answer.text === '' ? '' : `: ${clip(answer.text)}`}`,
         },
       }
     }
 
-    const body = await response.json()
+    const body = parseJson(answer.text)
     const data = body?.data
     if (data === null || data === undefined) {
       return {
@@ -495,33 +725,27 @@ async function codexUsage(options) {
   const accountId = nonEmptyString(tokens.account_id)
   if (accountId !== undefined) headers['ChatGPT-Account-ID'] = accountId
 
-  const response = await fetch(`${options.baseUrl}/wham/usage`, {
-    method: 'GET',
-    headers,
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  })
-  if (response.status === 401 || response.status === 403) {
-    const detail = await response.text().catch(() => '')
+  const answer = await readJson(`${options.baseUrl}/wham/usage`, headers, options.proxy)
+  if (answer.status === 401 || answer.status === 403) {
     return {
       status: 'error',
       error: {
         code: 'codex-token-expired',
-        message: `the Codex backend answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+        message: `the Codex backend answered HTTP ${answer.status}${answer.text === '' ? '' : `: ${clip(answer.text)}`}`,
       },
     }
   }
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
+  if (answer.status < 200 || answer.status >= 300) {
     return {
       status: 'error',
       error: {
-        code: `http-${response.status}`,
-        message: `the Codex backend answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+        code: `http-${answer.status}`,
+        message: `the Codex backend answered HTTP ${answer.status}${answer.text === '' ? '' : `: ${clip(answer.text)}`}`,
       },
     }
   }
 
-  const body = await response.json().catch(() => undefined)
+  const body = parseJson(answer.text)
   const rateLimit = isRecord(body?.rate_limit) ? body.rate_limit : {}
   const allowance = codexAllowance(rateLimit)
   if (allowance.rolling === undefined && allowance.weekly === undefined) {

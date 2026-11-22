@@ -14,6 +14,11 @@
       name: 'dsh-usage-hub'
       config:
         cacheTtlMs: 300000
+        # How outgoing reads reach the network: `system` (HTTPS_PROXY/ALL_PROXY,
+        # then the Windows per-user proxy), '' for a direct connection, or an
+        # explicit proxy URL such as http://127.0.0.1:7890. Loopback targets
+        # (a local OpenCode server) always go direct.
+        proxy: system
         deepseek:
           enabled: true
           apiKeyEnv: DEEPSEEK_API_KEY

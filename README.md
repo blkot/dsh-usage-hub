@@ -34,6 +34,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
       name: 'dsh-usage-hub'
       config:
         cacheTtlMs: 300000          # snapshot cache lifetime (5 minutes)
+        proxy: system               # system | '' (direct) | http://127.0.0.1:7890
         deepseek:
           enabled: true
           apiKeyEnv: DEEPSEEK_API_KEY
@@ -56,6 +57,12 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
 
 `enabled: false` on a provider removes its reading from the dock; the panel still names it as turned off.
 
+## Network and proxies
+
+Every outgoing read goes through `proxy`. The default, `system`, resolves `HTTPS_PROXY` / `https_proxy` / `ALL_PROXY` first and then the Windows per-user proxy (`Internet Settings`); `''` forces a direct connection, and a URL pins one proxy. Loopback targets always bypass the proxy, so a local OpenCode server is never handed to it, and a system proxy that cannot be reached degrades to a direct call instead of failing the reading.
+
+This matters wherever `chatgpt.com` — the Codex backend — is only reachable through a proxy, which is the usual case on a network that blocks it: without a proxy the Codex read fails while DeepSeek and the OpenCode gateway still work.
+
 ## Request frequency
 
 | Layer | Frequency | Notes |
@@ -73,6 +80,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
 - **OpenCode reads "no OpenCode credential was found"** — the `opencode-go` API key is not in the credential store and no local CLI was found. Configure the provider key in **Settings → Models** (it is stored as `OPENCODE_GO_API_KEY`), then refresh. The API-key path needs no OpenCode app at all.
 - **OpenCode reads "Not configured"** — the key resolved, but the gateway answered that the account has no Go allowance, or the usage payload carried no window; the panel shows the raw diagnostic under the hint.
 - **DeepSeek reads "Not configured"** — the credential named by `deepseek.apiKeyEnv` is missing.
+- **A provider reads "unavailable" while the others work** — check `proxy`: a host that needs the proxy fails when `proxy` is `''`, and a proxy that is down falls back to a direct call that fails the same way.
 - **Codex reads "The Codex token was rejected"** — the stored OAuth token is stale; run `codex login` again and refresh. This plugin reads the token but never refreshes or rewrites it, so the Codex CLI stays the owner of that file.
 
 ## Notes and limits

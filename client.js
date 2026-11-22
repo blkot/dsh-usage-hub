@@ -18,6 +18,14 @@ window.__ModuleLoader__.load({
       'pill.opencode': 'Go {value}',
       'pill.deepseekPending': 'DeepSeek …',
       'pill.opencodePending': 'Go …',
+      'pill.codex': 'Codex {value}',
+      'codex.window.session': '5h session',
+      'codex.window.weekly': 'Weekly',
+      'codex.plan': 'Plan {plan}',
+      'codex.credits': 'Credits {balance}',
+      'codex.creditsUnlimited': 'Credits unlimited',
+      'codex.resetCredits': '{count} banked resets',
+      'codex.hint': 'The Codex usage read failed. Sign in with `codex login` again, then refresh.',
       'panel.title': 'Subscription usage',
       'panel.refresh': 'Refresh',
       'panel.refreshing': 'Refreshing…',
@@ -45,6 +53,9 @@ window.__ModuleLoader__.load({
       'hint.notSignedIn': 'The OpenCode Console workspace is unknown. Sign in with the OpenCode desktop app, then refresh.',
       'hint.cliMissing': 'The OpenCode CLI was not found. Set opencode.cliPath in this bundle configuration, or configure the opencode-go API key so no CLI is needed.',
       'hint.noSource': 'No OpenCode credential was found. Set the opencode-go API key (OPENCODE_GO_API_KEY) in Settings → Models, or install and sign in to the OpenCode desktop app.',
+      'hint.codexNotSignedIn': 'The Codex CLI is set up but holds no OAuth token. Run `codex login` (or sign in with the Codex app), then refresh.',
+      'hint.codexExpired': 'The Codex token was rejected. Run `codex login` again, then refresh.',
+      'hint.codexAuthUnreadable': 'The Codex credential file could not be read. Check the path in codex.authPath.',
       'common.na': '—',
     }
 
@@ -53,6 +64,14 @@ window.__ModuleLoader__.load({
       'pill.opencode': 'Go {value}',
       'pill.deepseekPending': 'DeepSeek …',
       'pill.opencodePending': 'Go …',
+      'pill.codex': 'Codex {value}',
+      'codex.window.session': '5 小时会话',
+      'codex.window.weekly': '每周',
+      'codex.plan': '套餐 {plan}',
+      'codex.credits': '额度 ${balance}',
+      'codex.creditsUnlimited': '额度不限',
+      'codex.resetCredits': '存了 {count} 次重置',
+      'codex.hint': 'Codex 用量读取失败，请重新 codex login 后刷新。',
       'panel.title': '订阅用量',
       'panel.refresh': '刷新',
       'panel.refreshing': '刷新中…',
@@ -80,6 +99,9 @@ window.__ModuleLoader__.load({
       'hint.notSignedIn': '没有找到已登录的 OpenCode Console 工作区，请先用桌面端登录后刷新。',
       'hint.cliMissing': '没找到 OpenCode CLI：可以先在本插件配置里填 opencode.cliPath，或直接配置 opencode-go 的 API Key（这样就不需要 CLI）。',
       'hint.noSource': '没有可用的 OpenCode 凭据：请在「设置 → 模型」里配置 opencode-go 的 API Key（OPENCODE_GO_API_KEY），或安装并登录 OpenCode 桌面端。',
+      'hint.codexNotSignedIn': 'Codex CLI 已配置但没有 OAuth 凭据：运行 codex login（或用 Codex 应用登录）后刷新。',
+      'hint.codexExpired': 'Codex 的令牌被拒绝了：重新 codex login 后刷新。',
+      'hint.codexAuthUnreadable': '读不到 Codex 凭据文件，请检查 codex.authPath 配置的路径。',
       'common.na': '—',
     }
 
@@ -191,7 +213,8 @@ window.__ModuleLoader__.load({
           return t('pill.deepseek', { value: first === undefined ? t('common.na') : money(first.currency, first.total) })
         }
         const peak = peakPercent(entry.allowance)
-        return t('pill.opencode', { value: peak === undefined ? t('common.na') : `${peak}%` })
+        const label = entry.id === 'codex' ? 'pill.codex' : 'pill.opencode'
+        return t(label, { value: peak === undefined ? t('common.na') : `${peak}%` })
       }
       if (entry.status === 'unconfigured' || entry.status === 'disabled') return t('pill.unconfigured')
       return t('pill.failed')
@@ -216,13 +239,18 @@ window.__ModuleLoader__.load({
       if (code === 'not-signed-in') return t('hint.notSignedIn')
       if (code === 'cli-missing') return t('hint.cliMissing')
       if (code === 'no-source') return t('hint.noSource')
+      if (code === 'codex-not-signed-in') return t('hint.codexNotSignedIn')
+      if (code === 'codex-token-expired') return t('hint.codexExpired')
+      if (code === 'codex-auth-unreadable') return t('hint.codexAuthUnreadable')
       return undefined
     }
 
     /** One dot for a provider state. */
     function Dot(props) {
       const { entry, tone } = props
-      const state = entry?.status === 'ok' ? (tone === 'b' ? ' dshuh-dot--b' : ' dshuh-dot--a') : ' dshuh-dot--muted'
+      const state = entry?.status === 'ok'
+        ? (tone === 'b' ? ' dshuh-dot--b' : tone === 'c' ? ' dshuh-dot--c' : ' dshuh-dot--a')
+        : ' dshuh-dot--muted'
       return h('span', { className: `dshuh-dot${state}`, 'aria-hidden': true })
     }
 
@@ -238,7 +266,7 @@ window.__ModuleLoader__.load({
         'aria-label': entry === undefined ? t('panel.never') : `${entry.label}: ${pillText(t, entry)}`,
         onClick,
       },
-        h(Dot, { entry, tone: entry?.id === 'deepseek' ? 'a' : 'b' }),
+        h(Dot, { entry, tone: entry?.id === 'deepseek' ? 'a' : entry?.id === 'codex' ? 'c' : 'b' }),
         h('span', null, pillText(t, entry)),
       )
     }
@@ -296,12 +324,14 @@ window.__ModuleLoader__.load({
       }
       const deepseek = active('deepseek')
       const opencode = active('opencode-go')
-      if (deepseek === undefined && opencode === undefined) return null
+      const codex = active('codex')
+      if (deepseek === undefined && opencode === undefined && codex === undefined) return null
 
       return h('span', { className: 'dshuh-root', ref: rootRef },
         h('style', null, CSS),
         deepseek === undefined ? null : h(Pill, { t, entry: deepseek, open: state.open, onClick: toggle }),
         opencode === undefined ? null : h(Pill, { t, entry: opencode, open: state.open, onClick: toggle }),
+        codex === undefined ? null : h(Pill, { t, entry: codex, open: state.open, onClick: toggle }),
       )
     }
 
@@ -379,6 +409,37 @@ window.__ModuleLoader__.load({
             rel: 'noreferrer',
           }, t('opencode.openUsage'))
           : null,
+      )
+    }
+
+    /** Codex subscription block: plan, the two rate-limit windows, credits. */
+    function CodexBody(props) {
+      const { t, entry } = props
+      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
+      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
+      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'codex.hint' })
+
+      const credits = entry.credits ?? {}
+      return h('div', null,
+        entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('codex.plan', { plan: entry.plan })),
+        h(Meter, {
+          t,
+          label: t('codex.window.session'),
+          value: entry.allowance?.rolling,
+          tint: 'dshuh-tint--a',
+        }),
+        h(Meter, {
+          t,
+          label: t('codex.window.weekly'),
+          value: entry.allowance?.weekly,
+          tint: 'dshuh-tint--c',
+        }),
+        credits.unlimited === true
+          ? h('div', { className: 'dshuh-sub' }, t('codex.creditsUnlimited'))
+          : credits.hasCredits === true
+            ? h('div', { className: 'dshuh-sub' }, t('codex.credits', { balance: Number(credits.balance ?? 0).toFixed(2) }))
+            : null,
+        entry.resetCredits > 0 ? h('div', { className: 'dshuh-sub' }, t('codex.resetCredits', { count: entry.resetCredits })) : null,
       )
     }
 
@@ -464,6 +525,7 @@ window.__ModuleLoader__.load({
 
       const deepseek = entryOf(state.snapshot, 'deepseek')
       const opencode = entryOf(state.snapshot, 'opencode-go')
+      const codex = entryOf(state.snapshot, 'codex')
       const updated = state.snapshot === null
         ? t('panel.never')
         : t('panel.updated', { time: formatReset(state.snapshot.at) })
@@ -496,6 +558,7 @@ window.__ModuleLoader__.load({
         ),
         h(Section, { t, entry: deepseek, tone: 'a', loading }, h(DeepSeekBody, { t, entry: deepseek })),
         h(Section, { t, entry: opencode, tone: 'b', loading }, h(OpencodeBody, { t, entry: opencode })),
+        h(Section, { t, entry: codex, tone: 'c', loading }, h(CodexBody, { t, entry: codex })),
         state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
           t('panel.error', { detail: state.error })),
       )
@@ -524,6 +587,7 @@ window.__ModuleLoader__.load({
 .dshuh-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--dsw-alias-label-tertiary); }
 .dshuh-dot--a { background: var(--dsw-alias-chart-system, var(--dsw-alias-label-tertiary)); }
 .dshuh-dot--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
+.dshuh-dot--c { background: var(--dsw-alias-chart-messages, var(--dsw-alias-label-tertiary)); }
 .dshuh-dot--muted { background: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
 .dshuh-panel {
   position: fixed; z-index: 1100; box-sizing: border-box;

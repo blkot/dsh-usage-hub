@@ -30,3 +30,9 @@
           baseUrl: ''
           password: ''
           startTimeoutMs: 25000
+        codex:
+          enabled: true
+          # Empty: $CODEX_HOME/auth.json, else ~/.codex/auth.json. Codex signs in
+          # through ChatGPT, so this file is the only source of its allowance.
+          authPath: ''
+          baseUrl: 'https://chatgpt.com/backend-api'

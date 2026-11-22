@@ -23,6 +23,7 @@
 
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import net from 'node:net'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -80,6 +81,7 @@ export function apply(ctx, config) {
 function resolveSettings(config) {
   const deepseek = isRecord(config.deepseek) ? config.deepseek : {}
   const opencode = isRecord(config.opencode) ? config.opencode : {}
+  const codex = isRecord(config.codex) ? config.codex : {}
   return {
     cacheTtlMs: positiveInteger(config.cacheTtlMs, DEFAULT_TTL_MS),
     deepseek: {
@@ -97,6 +99,11 @@ function resolveSettings(config) {
       baseUrl: trimTrailingSlash(nonEmptyString(opencode.baseUrl) ?? ''),
       password: nonEmptyString(opencode.password) ?? '',
       startTimeoutMs: positiveInteger(opencode.startTimeoutMs, DEFAULT_START_TIMEOUT_MS),
+    },
+    codex: {
+      enabled: codex.enabled !== false,
+      authPath: nonEmptyString(codex.authPath) ?? '',
+      baseUrl: trimTrailingSlash(nonEmptyString(codex.baseUrl) ?? 'https://chatgpt.com/backend-api'),
     },
   }
 }
@@ -173,6 +180,7 @@ async function collect(ctx, settings) {
   const results = await Promise.all([
     guard('deepseek', 'DeepSeek API', () => deepseekUsage(ctx, settings.deepseek)),
     guard('opencode-go', 'OpenCode Go', () => opencodeUsage(ctx, settings.opencode)),
+    guard('codex', 'Codex', () => codexUsage(settings.codex)),
   ])
   return { at: Date.now(), providers: results.filter((entry) => entry !== undefined) }
 }
@@ -441,6 +449,189 @@ async function serverUsage(options) {
   } finally {
     stopServer(server)
   }
+}
+
+/**
+ * Read the Codex subscription allowance.
+ *
+ * Codex signs in through ChatGPT rather than an API key, so the only source is
+ * the OAuth token the Codex CLI keeps in `${CODEX_HOME:-~/.codex}/auth.json`.
+ * The backend reports the same two windows the CLI's `/status` shows: a 5-hour
+ * session and a weekly cap.
+ *
+ * @param options - codex settings.
+ * @returns provider entry, or undefined when Codex is not set up on this machine.
+ */
+async function codexUsage(options) {
+  if (!options.enabled) return undefined
+  const authPath = options.authPath !== '' ? options.authPath : defaultCodexAuthPath()
+  if (!existsSync(authPath)) return undefined
+
+  let auth
+  try {
+    auth = JSON.parse(await readFile(authPath, 'utf8'))
+  } catch (error) {
+    return {
+      status: 'error',
+      error: { code: 'codex-auth-unreadable', message: `could not read ${authPath}: ${reasonOf(error)}` },
+    }
+  }
+
+  const tokens = isRecord(auth?.tokens) ? auth.tokens : {}
+  const token = nonEmptyString(tokens.access_token)
+  if (token === undefined) {
+    return {
+      status: 'unconfigured',
+      error: { code: 'codex-not-signed-in', message: `no OAuth access token in ${authPath}` },
+    }
+  }
+
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: 'application/json',
+    'user-agent': 'codex-cli',
+    ...codexAccountHeaders(token),
+  }
+  const accountId = nonEmptyString(tokens.account_id)
+  if (accountId !== undefined) headers['ChatGPT-Account-ID'] = accountId
+
+  const response = await fetch(`${options.baseUrl}/wham/usage`, {
+    method: 'GET',
+    headers,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+  })
+  if (response.status === 401 || response.status === 403) {
+    const detail = await response.text().catch(() => '')
+    return {
+      status: 'error',
+      error: {
+        code: 'codex-token-expired',
+        message: `the Codex backend answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+      },
+    }
+  }
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    return {
+      status: 'error',
+      error: {
+        code: `http-${response.status}`,
+        message: `the Codex backend answered HTTP ${response.status}${detail === '' ? '' : `: ${clip(detail)}`}`,
+      },
+    }
+  }
+
+  const body = await response.json().catch(() => undefined)
+  const rateLimit = isRecord(body?.rate_limit) ? body.rate_limit : {}
+  const allowance = codexAllowance(rateLimit)
+  if (allowance.rolling === undefined && allowance.weekly === undefined) {
+    return {
+      status: 'error',
+      error: {
+        code: 'unexpected-payload',
+        message: `the Codex answer carried no rate-limit window: ${clip(JSON.stringify(body ?? null))}`,
+      },
+    }
+  }
+
+  const credits = isRecord(body?.credits) ? body.credits : {}
+  const plan = nonEmptyString(body?.plan_type)
+  return {
+    status: 'ok',
+    source: 'codex-auth',
+    plan: plan === undefined ? undefined : `${plan.charAt(0).toUpperCase()}${plan.slice(1)}`,
+    credits: {
+      hasCredits: credits.has_credits === true,
+      unlimited: credits.unlimited === true,
+      balance: Number(credits.balance ?? 0) || 0,
+    },
+    resetCredits: Number(body?.rate_limit_reset_credits?.available_count ?? 0) || 0,
+    allowance,
+  }
+}
+
+/**
+ * The Codex CLI's credential file.
+ * @returns absolute path.
+ */
+function defaultCodexAuthPath() {
+  const override = process.env.CODEX_HOME
+  const home = typeof override === 'string' && override !== '' ? override : path.join(homedir(), '.codex')
+  return path.join(home, 'auth.json')
+}
+
+/**
+ * Workspace headers the Codex backend derives from the OAuth JWT; a malformed
+ * token contributes nothing rather than failing the read.
+ * @param token - the access token.
+ * @returns header record.
+ */
+function codexAccountHeaders(token) {
+  const headers = {}
+  try {
+    const parts = String(token).split('.')
+    if (parts.length < 2) return headers
+    const segment = parts[1] + '='.repeat((4 - parts[1].length % 4) % 4)
+    const claims = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'))
+    const auth = isRecord(claims?.['https://api.openai.com/auth']) ? claims['https://api.openai.com/auth'] : {}
+    if (typeof auth.chatgpt_account_id === 'string' && auth.chatgpt_account_id !== '') {
+      headers['ChatGPT-Account-ID'] = auth.chatgpt_account_id
+    }
+    const residency = auth.chatgpt_data_residency ?? auth.chatgpt_compute_residency
+    if (typeof residency === 'string' && residency.trim() !== '') {
+      headers['x-openai-internal-codex-residency'] = residency.trim()
+    }
+  } catch {
+    // A token that is not a JWT simply supplies no extra headers.
+  }
+  return headers
+}
+
+/**
+ * Map Codex rate-limit windows onto the panel's allowance slots.
+ *
+ * The backend keys windows by position but states their duration; a payload
+ * that carries only the weekly cap puts it in `primary_window`, so the
+ * duration decides the slot and position is the fallback.
+ *
+ * @param rateLimit - `rate_limit` from the answer.
+ * @returns `{ rolling, weekly }` windows.
+ */
+function codexAllowance(rateLimit) {
+  const windows = {}
+  for (const key of ['primary_window', 'secondary_window']) {
+    const raw = rateLimit[key]
+    if (!isRecord(raw)) continue
+    const percent = Number(raw.used_percent)
+    if (!Number.isFinite(percent)) continue
+    const seconds = Number(raw.limit_window_seconds)
+    const slot = seconds === 604800 ? 'weekly' : (seconds === 18000 ? 'rolling' : (windows.rolling === undefined ? 'rolling' : 'weekly'))
+    if (windows[slot] !== undefined) continue
+    windows[slot] = {
+      percent: Math.max(0, Math.min(100, percent)),
+      limited: rateLimit.limit_reached === true,
+      resetsAt: codexInstant(raw.reset_at),
+    }
+  }
+  return { rolling: windows.rolling, weekly: windows.weekly }
+}
+
+/**
+ * Read a Codex reset instant: epoch seconds (the backend's usual spelling),
+ * epoch milliseconds, or an ISO instant.
+ * @param value - raw value.
+ * @returns epoch milliseconds, or 0.
+ */
+function codexInstant(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1e12 ? Math.round(value * 1000) : value
+  }
+  if (typeof value === 'string' && value !== '') {
+    if (/^\d+(\.\d+)?$/.test(value)) return codexInstant(Number(value))
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? 0 : parsed
+  }
+  return 0
 }
 
 /**

@@ -19,6 +19,12 @@ window.__ModuleLoader__.load({
       'pill.deepseekPending': 'DeepSeek …',
       'pill.opencodePending': 'Go …',
       'pill.codex': 'Codex {value}',
+      'pill.zai': 'GLM {value}',
+      'zai.plan': 'Plan {plan}',
+      'zai.window.tokens': '5h tokens',
+      'zai.window.weekly': 'Weekly tokens',
+      'zai.window.time': 'Monthly MCP',
+      'zai.hint': 'The GLM quota read failed. Check that ZAI_API_KEY is a GLM Coding Plan key, then refresh.',
       'codex.window.session': '5h session',
       'codex.window.weekly': 'Weekly',
       'codex.plan': 'Plan {plan}',
@@ -70,6 +76,12 @@ window.__ModuleLoader__.load({
       'pill.deepseekPending': 'DeepSeek …',
       'pill.opencodePending': 'Go …',
       'pill.codex': 'Codex {value}',
+      'pill.zai': 'GLM {value}',
+      'zai.plan': '套餐 {plan}',
+      'zai.window.tokens': '5 小时 tokens',
+      'zai.window.weekly': '每周 tokens',
+      'zai.window.time': '每月 MCP',
+      'zai.hint': 'GLM 额度读取失败，请确认 ZAI_API_KEY 是 GLM Coding Plan 的 key 后刷新。',
       'codex.window.session': '5 小时会话',
       'codex.window.weekly': '每周',
       'codex.plan': '套餐 {plan}',
@@ -224,7 +236,7 @@ window.__ModuleLoader__.load({
           return t('pill.deepseek', { value: first === undefined ? t('common.na') : money(first.currency, first.total) })
         }
         const peak = peakPercent(entry.allowance)
-        const label = entry.id === 'codex' ? 'pill.codex' : 'pill.opencode'
+        const label = entry.id === 'codex' ? 'pill.codex' : entry.id === 'zai' ? 'pill.zai' : 'pill.opencode'
         return t(label, { value: peak === undefined ? t('common.na') : `${peak}%` })
       }
       if (entry.status === 'unconfigured' || entry.status === 'disabled') return t('pill.unconfigured')
@@ -253,6 +265,7 @@ window.__ModuleLoader__.load({
       if (code === 'codex-not-signed-in') return t('hint.codexNotSignedIn')
       if (code === 'codex-token-expired') return t('hint.codexExpired')
       if (code === 'codex-auth-unreadable') return t('hint.codexAuthUnreadable')
+      if (code === 'zai-key-rejected') return t('zai.hint')
       return undefined
     }
 
@@ -292,6 +305,7 @@ window.__ModuleLoader__.load({
       deepseek: ['deepseek', 'deepseek-official', 'deepseek-api', 'deepseek-account'],
       'opencode-go': ['opencode-go', 'opencode', 'opencode-zen', 'opencode-zen-go'],
       codex: ['codex', 'openai-codex', 'chatgpt', 'openai'],
+      zai: ['zai', 'zai-coding', 'zai-coding-cn', 'zai-intl', 'glm', 'zhipu', 'bigmodel', 'zhipu-bigmodel-coding'],
     }
 
     /**
@@ -463,13 +477,15 @@ window.__ModuleLoader__.load({
       const deepseek = active('deepseek')
       const opencode = active('opencode-go')
       const codex = active('codex')
-      if (deepseek === undefined && opencode === undefined && codex === undefined) return null
+      const zai = active('zai')
+      if (deepseek === undefined && opencode === undefined && codex === undefined && zai === undefined) return null
 
       return h('span', { className: 'dshuh-root', ref: rootRef },
         h('style', null, CSS),
         deepseek === undefined ? null : h(Pill, { t, entry: deepseek, open: state.open, onClick: toggle, active: activeId === 'deepseek' }),
         opencode === undefined ? null : h(Pill, { t, entry: opencode, open: state.open, onClick: toggle, active: activeId === 'opencode-go' }),
         codex === undefined ? null : h(Pill, { t, entry: codex, open: state.open, onClick: toggle, active: activeId === 'codex' }),
+        zai === undefined ? null : h(Pill, { t, entry: zai, open: state.open, onClick: toggle, active: activeId === 'zai' }),
       )
     }
 
@@ -617,6 +633,29 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** GLM Coding Plan block: plan, token windows, monthly MCP quota. */
+    function ZaiBody(props) {
+      const { t, entry } = props
+      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
+      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
+      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'zai.hint' })
+
+      const labels = entry.labels ?? {}
+      const tints = { rolling: 'dshuh-tint--a', weekly: 'dshuh-tint--c', monthly: 'dshuh-tint--b' }
+      return h('div', null,
+        entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('zai.plan', { plan: entry.plan })),
+        ['rolling', 'weekly', 'monthly'].map((slot) => entry.allowance?.[slot] === undefined
+          ? null
+          : h(Meter, {
+            key: slot,
+            t,
+            label: t(`zai.window.${labels[slot] ?? 'tokens'}`),
+            value: entry.allowance[slot],
+            tint: tints[slot],
+          })),
+      )
+    }
+
     /** One provider section in the panel. */
     function Section(props) {
       const { t, entry, loading, active, children } = props
@@ -701,6 +740,7 @@ window.__ModuleLoader__.load({
       const deepseek = entryOf(state.snapshot, 'deepseek')
       const opencode = entryOf(state.snapshot, 'opencode-go')
       const codex = entryOf(state.snapshot, 'codex')
+      const zai = entryOf(state.snapshot, 'zai')
       const updated = state.snapshot === null
         ? t('panel.never')
         : t('panel.updated', { time: formatReset(state.snapshot.at) })
@@ -734,6 +774,7 @@ window.__ModuleLoader__.load({
         h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' }, h(DeepSeekBody, { t, entry: deepseek })),
         h(Section, { t, entry: opencode, loading, active: state.activeProvider === 'opencode-go' }, h(OpencodeBody, { t, entry: opencode })),
         h(Section, { t, entry: codex, loading, active: state.activeProvider === 'codex' }, h(CodexBody, { t, entry: codex })),
+        h(Section, { t, entry: zai, loading, active: state.activeProvider === 'zai' }, h(ZaiBody, { t, entry: zai })),
         state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
           t('panel.error', { detail: state.error })),
       )
@@ -793,6 +834,12 @@ window.__ModuleLoader__.load({
   --dshuh-active-fg: #12161c;
   --dshuh-active-line: rgba(18, 22, 28, 0.28);
 }
+.dshuh-pill[data-active][data-provider='zai'],
+.dshuh-current[data-provider='zai'] {
+  --dshuh-active-bg: rgba(79, 91, 213, 0.13);
+  --dshuh-active-fg: #3a45b8;
+  --dshuh-active-line: rgba(79, 91, 213, 0.42);
+}
 .dshuh-pill[data-active][data-provider='codex'],
 .dshuh-current[data-provider='codex'] {
   --dshuh-active-bg: rgba(16, 163, 127, 0.13);
@@ -810,6 +857,12 @@ body[data-ds-dark-theme] .dshuh-current[data-provider='opencode-go'] {
   --dshuh-active-bg: rgba(238, 241, 246, 0.14);
   --dshuh-active-fg: #eef1f6;
   --dshuh-active-line: rgba(238, 241, 246, 0.35);
+}
+body[data-ds-dark-theme] .dshuh-pill[data-active][data-provider='zai'],
+body[data-ds-dark-theme] .dshuh-current[data-provider='zai'] {
+  --dshuh-active-bg: rgba(129, 140, 248, 0.24);
+  --dshuh-active-fg: #b9c0ff;
+  --dshuh-active-line: rgba(129, 140, 248, 0.5);
 }
 body[data-ds-dark-theme] .dshuh-pill[data-active][data-provider='codex'],
 body[data-ds-dark-theme] .dshuh-current[data-provider='codex'] {

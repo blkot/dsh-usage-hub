@@ -85,6 +85,7 @@ function resolveSettings(config) {
   const deepseek = isRecord(config.deepseek) ? config.deepseek : {}
   const opencode = isRecord(config.opencode) ? config.opencode : {}
   const codex = isRecord(config.codex) ? config.codex : {}
+  const zai = isRecord(config.zai) ? config.zai : {}
   // `system` resolves HTTPS_PROXY/ALL_PROXY, then the platform proxy; an
   // explicit empty string means a direct connection, so it must survive the
   // usual "blank means unset" rule.
@@ -114,6 +115,12 @@ function resolveSettings(config) {
       authPath: nonEmptyString(codex.authPath) ?? '',
       baseUrl: trimTrailingSlash(nonEmptyString(codex.baseUrl) ?? 'https://chatgpt.com/backend-api'),
       proxy: typeof codex.proxy === 'string' ? codex.proxy.trim() : proxy,
+    },
+    zai: {
+      enabled: zai.enabled !== false,
+      apiKeyEnv: nonEmptyString(zai.apiKeyEnv) ?? 'ZAI_API_KEY',
+      baseUrl: trimTrailingSlash(nonEmptyString(zai.baseUrl) ?? 'https://api.z.ai'),
+      proxy: typeof zai.proxy === 'string' ? zai.proxy.trim() : proxy,
     },
   }
 }
@@ -191,6 +198,7 @@ async function collect(ctx, settings) {
     guard('deepseek', 'DeepSeek API', () => deepseekUsage(ctx, settings.deepseek)),
     guard('opencode-go', 'OpenCode Go', () => opencodeUsage(ctx, settings.opencode)),
     guard('codex', 'Codex', () => codexUsage(settings.codex)),
+    guard('zai', 'GLM (Z.ai)', () => zaiUsage(ctx, settings.zai)),
   ])
   return { at: Date.now(), providers: results.filter((entry) => entry !== undefined) }
 }
@@ -938,6 +946,106 @@ function codexInstant(value) {
     return Number.isNaN(parsed) ? 0 : parsed
   }
   return 0
+}
+
+/**
+ * Read the GLM Coding Plan quota from Z.ai's monitoring endpoint.
+ *
+ * A plan reports several independent limits — a 5-hour token window, a weekly
+ * token window and the monthly MCP allowance — each with its own percentage
+ * and reset instant. The envelope answers HTTP 200 even when authentication
+ * fails, so `success` and `code` decide the outcome rather than the status
+ * line. A machine with no key simply has no GLM reading.
+ *
+ * @param ctx - Host context (credential seam).
+ * @param options - zai settings.
+ * @returns provider entry, or undefined when the key is absent.
+ */
+async function zaiUsage(ctx, options) {
+  if (!options.enabled) return undefined
+  const credential = await resolveCredential(ctx, options.apiKeyEnv)
+  if (credential === undefined) return undefined
+
+  const answer = await readJson(`${options.baseUrl}/api/monitor/usage/quota/limit`, {
+    authorization: `Bearer ${credential.value}`,
+    accept: 'application/json',
+  }, options.proxy)
+
+  const body = parseJson(answer.text)
+  if (body === undefined) {
+    return {
+      status: 'error',
+      error: {
+        code: 'unexpected-payload',
+        message: `Z.ai answered HTTP ${answer.status} without JSON: ${clip(answer.text)}`,
+      },
+    }
+  }
+  if (body.success !== true) {
+    const code = body.code ?? answer.status
+    const unauthenticated = code === 401 || code === 1001
+    const message = typeof body.msg === 'string' ? body.msg : `HTTP ${answer.status}`
+    return {
+      status: unauthenticated ? 'unconfigured' : 'error',
+      error: {
+        code: unauthenticated ? 'zai-key-rejected' : `zai-${code}`,
+        message: `Z.ai refused the read: ${clip(message)}`,
+      },
+    }
+  }
+
+  const data = isRecord(body.data) ? body.data : {}
+  const limits = Array.isArray(data.limits) ? data.limits.filter((limit) => isRecord(limit)) : []
+  const tokens = limits.filter((limit) => limit.type === 'TOKENS_LIMIT')
+  const time = limits.find((limit) => limit.type === 'TIME_LIMIT')
+  const allowance = { rolling: undefined, weekly: undefined, monthly: undefined }
+  const labels = {}
+  if (tokens[0] !== undefined) {
+    allowance.rolling = zaiWindow(tokens[0])
+    labels.rolling = 'tokens'
+  }
+  if (tokens[1] !== undefined) {
+    allowance.weekly = zaiWindow(tokens[1])
+    labels.weekly = 'tokens'
+  }
+  if (time !== undefined) {
+    allowance.monthly = zaiWindow(time)
+    labels.monthly = 'time'
+  }
+  if (allowance.rolling === undefined && allowance.weekly === undefined && allowance.monthly === undefined) {
+    return {
+      status: 'error',
+      error: {
+        code: 'unexpected-payload',
+        message: `Z.ai returned no known quota limit: ${clip(JSON.stringify(data))}`,
+      },
+    }
+  }
+
+  const level = nonEmptyString(data.level)
+  return {
+    status: 'ok',
+    source: 'zai-monitor',
+    credentialSource: credential.source,
+    plan: level === undefined ? undefined : `${level.charAt(0).toUpperCase()}${level.slice(1)}`,
+    allowance,
+    labels,
+  }
+}
+
+/**
+ * Normalize one Z.ai quota limit.
+ * @param limit - one `limits` entry.
+ * @returns normalized window.
+ */
+function zaiWindow(limit) {
+  const percent = Number(limit.percentage)
+  const known = Number.isFinite(percent)
+  return {
+    percent: known ? Math.max(0, Math.min(100, percent)) : 0,
+    limited: known && percent >= 100,
+    resetsAt: instantOf(limit.nextResetTime),
+  }
 }
 
 /**

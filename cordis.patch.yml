@@ -41,3 +41,9 @@
           # through ChatGPT, so this file is the only source of its allowance.
           authPath: ''
           baseUrl: 'https://chatgpt.com/backend-api'
+        zai:
+          enabled: true
+          # GLM Coding Plan key; empty/unset means no GLM reading at all.
+          apiKeyEnv: ZAI_API_KEY
+          # https://open.bigmodel.cn for the CN region.
+          baseUrl: 'https://api.z.ai'

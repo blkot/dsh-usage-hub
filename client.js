@@ -25,6 +25,10 @@ window.__ModuleLoader__.load({
       'codex.credits': 'Credits {balance}',
       'codex.creditsUnlimited': 'Credits unlimited',
       'codex.resetCredits': '{count} banked resets',
+      'codex.resetCreditsItem': 'Banked reset',
+      'codex.resetCreditsUnknown': 'Expiry details are unavailable right now.',
+      'codex.expiresAt': 'expires {time}',
+      'codex.noExpiry': 'no expiry',
       'codex.hint': 'The Codex usage read failed. Sign in with `codex login` again, then refresh.',
       'panel.title': 'Subscription usage',
       'panel.refresh': 'Refresh',
@@ -71,6 +75,10 @@ window.__ModuleLoader__.load({
       'codex.credits': '额度 ${balance}',
       'codex.creditsUnlimited': '额度不限',
       'codex.resetCredits': '存了 {count} 次重置',
+      'codex.resetCreditsItem': '存入的重置',
+      'codex.resetCreditsUnknown': '暂时拿不到每次重置的到期时间。',
+      'codex.expiresAt': '{time} 到期',
+      'codex.noExpiry': '无到期时间',
       'codex.hint': 'Codex 用量读取失败，请重新 codex login 后刷新。',
       'panel.title': '订阅用量',
       'panel.refresh': '刷新',
@@ -412,6 +420,37 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The banked-reset summary, expanding to each credit and its expiry. */
+    function BankedResets(props) {
+      const { t, count, items } = props
+      const [open, setOpen] = React.useState(false)
+      return h('div', { className: 'dshuh-banked' },
+        h('button', {
+          type: 'button',
+          className: 'dshuh-banked-toggle',
+          'aria-expanded': open,
+          onClick: () => { setOpen(!open) },
+        },
+          h('span', null, t('codex.resetCredits', { count })),
+          h('span', { className: 'dshuh-caret', 'aria-hidden': true }, open ? '▾' : '▸'),
+        ),
+        open
+          ? h('ul', { className: 'dshuh-banked-list' },
+            items.length === 0
+              ? h('li', { className: 'dshuh-banked-item' }, t('codex.resetCreditsUnknown'))
+              : items.map((item, index) => h('li', {
+                key: item.id === '' ? String(index) : item.id,
+                className: 'dshuh-banked-item',
+              },
+                h('span', { className: 'dshuh-banked-title' },
+                  item.title === '' ? t('codex.resetCreditsItem') : item.title),
+                h('span', { className: 'dshuh-banked-expiry' },
+                  item.expiresAt > 0 ? t('codex.expiresAt', { time: formatReset(item.expiresAt) }) : t('codex.noExpiry')),
+              )))
+          : null,
+      )
+    }
+
     /** Codex subscription block: plan, the two rate-limit windows, credits. */
     function CodexBody(props) {
       const { t, entry } = props
@@ -420,6 +459,10 @@ window.__ModuleLoader__.load({
       if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'codex.hint' })
 
       const credits = entry.credits ?? {}
+      // A count-only answer (an older Host half) still renders its summary.
+      const reset = entry.resetCredits
+      const resetCount = typeof reset === 'number' ? reset : Number(reset?.count ?? 0) || 0
+      const resetItems = Array.isArray(reset?.items) ? reset.items : []
       return h('div', null,
         entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('codex.plan', { plan: entry.plan })),
         h(Meter, {
@@ -439,7 +482,7 @@ window.__ModuleLoader__.load({
           : credits.hasCredits === true
             ? h('div', { className: 'dshuh-sub' }, t('codex.credits', { balance: Number(credits.balance ?? 0).toFixed(2) }))
             : null,
-        entry.resetCredits > 0 ? h('div', { className: 'dshuh-sub' }, t('codex.resetCredits', { count: entry.resetCredits })) : null,
+        resetCount > 0 ? h(BankedResets, { t, count: resetCount, items: resetItems }) : null,
       )
     }
 
@@ -631,6 +674,21 @@ window.__ModuleLoader__.load({
 .dshuh-fill.dshuh-tint--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
 .dshuh-fill.dshuh-tint--c { background: var(--dsw-alias-chart-messages, var(--dsw-alias-label-tertiary)); }
 .dshuh-reset { color: var(--dsw-alias-label-tertiary); }
+.dshuh-banked { margin-top: 6px; }
+.dshuh-banked-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0;
+  border: 0; background: transparent; color: var(--dsw-alias-label-secondary);
+  font: inherit; cursor: pointer;
+}
+.dshuh-banked-toggle:hover { color: var(--dsw-alias-label-primary); }
+.dshuh-caret { font-size: 10px; color: var(--dsw-alias-label-tertiary); }
+.dshuh-banked-list { margin: 4px 0 0; padding: 0 0 0 14px; list-style: none; }
+.dshuh-banked-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 2px 0; color: var(--dsw-alias-label-tertiary);
+}
+.dshuh-banked-title { color: var(--dsw-alias-label-secondary); }
+.dshuh-banked-expiry { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .dshuh-link { display: inline-block; margin-top: 8px; color: var(--dsw-alias-label-secondary); text-decoration: underline; }
 .dshuh-link:hover { color: var(--dsw-alias-label-primary); }
 .dshuh-error {

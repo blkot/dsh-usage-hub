@@ -24,7 +24,7 @@ then install the directory with **Plugins → Add plugin**, or point `plugin_man
   - **`server`** — `GET /api/experimental/usage/limits` on a local OpenCode server: the plugin attaches to a server you configure (`opencode.baseUrl` + `opencode.password`), or starts the CLI on a free loopback port, reads its printed password, asks once, and stops it again. This also reports the Console workspace name, the usage-page link and Console budgets.
 
   `auto` uses the API key when it resolves and falls back to a local server otherwise; `api` never starts a process; `server` never uses the key.
-- **Codex** — `GET https://chatgpt.com/backend-api/wham/usage` with the OAuth token the Codex CLI stores in `${CODEX_HOME:-~/.codex}/auth.json`; Codex signs in through ChatGPT, so an API key cannot show this. The panel shows the 5-hour session and weekly limits with their reset times, the plan name, credits, and any banked rate-limit resets. A machine without that file simply has no Codex reading.
+- **Codex** — `GET https://chatgpt.com/backend-api/wham/usage` with the OAuth token the Codex CLI stores in `${CODEX_HOME:-~/.codex}/auth.json`; Codex signs in through ChatGPT, so an API key cannot show this. The panel shows the 5-hour session and weekly limits with their reset times, the plan name, credits, and any banked rate-limit resets; the reset count expands to each credit with its own expiry, read from `GET /wham/rate-limit-reset-credits` (the usage answer only counts them). That second call is best-effort — a failure lists no expiry instead of costing the reading. A machine without that file simply has no Codex reading.
 
 ## Configuration
 
@@ -68,7 +68,7 @@ This matters wherever `chatgpt.com` — the Codex backend — is only reachable 
 | Layer | Frequency | Notes |
 |---|---|---|
 | Browser → plugin route | every 5 minutes | `POLL_MS` in `client.js`, plus one read at page load |
-| Plugin → upstream | at most once per `cacheTtlMs` | one call per provider per cache miss |
+| Plugin → upstream | at most once per `cacheTtlMs` | one call per provider per cache miss; Codex adds one more while banked resets exist |
 | Panel Refresh | immediately | bypasses the cache; every provider re-reads |
 
 - The client poll and the cache TTL are both five minutes, so a poll almost always finds the cache expired: upstream traffic is effectively one refresh per five minutes while a page is open.

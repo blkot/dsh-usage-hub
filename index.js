@@ -85,15 +85,17 @@ function resolveSettings(config) {
   const deepseek = isRecord(config.deepseek) ? config.deepseek : {}
   const opencode = isRecord(config.opencode) ? config.opencode : {}
   const codex = isRecord(config.codex) ? config.codex : {}
-  // `system` resolves HTTPS_PROXY/ALL_PROXY, then the Windows system proxy.
-  const proxy = nonEmptyString(config.proxy) ?? 'system'
+  // `system` resolves HTTPS_PROXY/ALL_PROXY, then the platform proxy; an
+  // explicit empty string means a direct connection, so it must survive the
+  // usual "blank means unset" rule.
+  const proxy = typeof config.proxy === 'string' ? config.proxy.trim() : 'system'
   return {
     cacheTtlMs: positiveInteger(config.cacheTtlMs, DEFAULT_TTL_MS),
     deepseek: {
       enabled: deepseek.enabled !== false,
       apiKeyEnv: nonEmptyString(deepseek.apiKeyEnv) ?? 'DEEPSEEK_API_KEY',
       baseUrl: trimTrailingSlash(nonEmptyString(deepseek.baseUrl) ?? 'https://api.deepseek.com'),
-      proxy: nonEmptyString(deepseek.proxy) ?? proxy,
+      proxy: typeof deepseek.proxy === 'string' ? deepseek.proxy.trim() : proxy,
     },
     opencode: {
       enabled: opencode.enabled !== false,
@@ -105,13 +107,13 @@ function resolveSettings(config) {
       baseUrl: trimTrailingSlash(nonEmptyString(opencode.baseUrl) ?? ''),
       password: nonEmptyString(opencode.password) ?? '',
       startTimeoutMs: positiveInteger(opencode.startTimeoutMs, DEFAULT_START_TIMEOUT_MS),
-      proxy: nonEmptyString(opencode.proxy) ?? proxy,
+      proxy: typeof opencode.proxy === 'string' ? opencode.proxy.trim() : proxy,
     },
     codex: {
       enabled: codex.enabled !== false,
       authPath: nonEmptyString(codex.authPath) ?? '',
       baseUrl: trimTrailingSlash(nonEmptyString(codex.baseUrl) ?? 'https://chatgpt.com/backend-api'),
-      proxy: nonEmptyString(codex.proxy) ?? proxy,
+      proxy: typeof codex.proxy === 'string' ? codex.proxy.trim() : proxy,
     },
   }
 }
@@ -806,6 +808,8 @@ async function codexUsage(options) {
 
   const credits = isRecord(body?.credits) ? body.credits : {}
   const plan = nonEmptyString(body?.plan_type)
+  const summary = isRecord(body?.rate_limit_reset_credits) ? body.rate_limit_reset_credits : {}
+  const resetCount = Number(summary.available_count ?? 0) || 0
   return {
     status: 'ok',
     source: 'codex-auth',
@@ -815,8 +819,40 @@ async function codexUsage(options) {
       unlimited: credits.unlimited === true,
       balance: Number(credits.balance ?? 0) || 0,
     },
-    resetCredits: Number(body?.rate_limit_reset_credits?.available_count ?? 0) || 0,
+    resetCredits: {
+      count: resetCount,
+      items: resetCount > 0 ? await codexResetCredits(options, headers) : [],
+    },
     allowance,
+  }
+}
+
+/**
+ * List the banked reset credits, with the expiry each one carries.
+ *
+ * The usage answer only counts them; the dedicated endpoint is the only place
+ * that dates each credit. A failure here must never cost the windows the
+ * caller already has, so every problem answers an empty list.
+ *
+ * @param options - codex settings.
+ * @param headers - the authenticated headers already built for the usage call.
+ * @returns normalized credits.
+ */
+async function codexResetCredits(options, headers) {
+  try {
+    const answer = await readJson(`${options.baseUrl}/wham/rate-limit-reset-credits`, headers, options.proxy)
+    if (answer.status < 200 || answer.status >= 300) return []
+    const body = parseJson(answer.text)
+    const list = Array.isArray(body?.credits) ? body.credits : []
+    return list.map((raw) => ({
+      id: String(raw?.id ?? ''),
+      status: String(raw?.status ?? ''),
+      grantedAt: codexInstant(raw?.granted_at),
+      expiresAt: codexInstant(raw?.expires_at),
+      title: nonEmptyString(raw?.title) ?? '',
+    }))
+  } catch {
+    return []
   }
 }
 

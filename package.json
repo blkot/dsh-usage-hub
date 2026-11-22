@@ -1,6 +1,6 @@
 {
   "name": "dsh-usage-hub",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "private": true,
   "description": "Aggregated subscription usage in the DeepSeek Harness composer dock: DeepSeek API balance and OpenCode Go allowance.",
   "type": "module",

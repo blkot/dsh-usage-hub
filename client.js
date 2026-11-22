@@ -393,6 +393,7 @@ window.__ModuleLoader__.load({
           ? t('panel.never')
           : `${entry.label}: ${pillText(t, entry)}${credits.length === 0 ? '' : `, ${t('codex.resetCredits', { count: credits.length })}`}${active === true ? `, ${t('reading.current')}` : ''}`,
         'data-active': active === true ? '' : undefined,
+        'data-provider': entry?.id,
         onClick,
       },
         entry === undefined ? null : h(ChannelIcon, { id: entry.id, size: 12 }),
@@ -623,7 +624,7 @@ window.__ModuleLoader__.load({
         h('div', { className: 'dshuh-section-head' },
           h(ChannelIcon, { id: entry?.id, size: 14 }),
           h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
-          active === true ? h('span', { className: 'dshuh-current' }, t('reading.current')) : null,
+          active === true ? h('span', { className: 'dshuh-current', 'data-provider': entry?.id }, t('reading.current')) : null,
           h('span', { className: 'dshuh-status' }, statusText(t, entry, loading)),
         ),
         children,
@@ -772,14 +773,56 @@ window.__ModuleLoader__.load({
 }
 .dshuh-pill--warn { color: var(--dsw-alias-label-tertiary); }
 .dshuh-icon { flex: none; display: block; }
+/* The reading in use is a filled, tinted chip in the provider's own colour:
+   a hairline alone was too easy to miss at 20 px of height. */
 .dshuh-pill[data-active] {
-  color: var(--dsw-alias-label-primary);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+  background: var(--dshuh-active-bg, var(--dsw-alias-interactive-bg-hover));
+  color: var(--dshuh-active-fg, var(--dsw-alias-label-primary));
+  box-shadow: inset 0 0 0 1px var(--dshuh-active-line, var(--dsw-alias-border-l2));
+  font-weight: 500;
+}
+.dshuh-pill[data-active][data-provider='deepseek'],
+.dshuh-current[data-provider='deepseek'] {
+  --dshuh-active-bg: rgba(87, 134, 254, 0.14);
+  --dshuh-active-fg: #3f63d8;
+  --dshuh-active-line: rgba(87, 134, 254, 0.45);
+}
+.dshuh-pill[data-active][data-provider='opencode-go'],
+.dshuh-current[data-provider='opencode-go'] {
+  --dshuh-active-bg: rgba(18, 22, 28, 0.07);
+  --dshuh-active-fg: #12161c;
+  --dshuh-active-line: rgba(18, 22, 28, 0.28);
+}
+.dshuh-pill[data-active][data-provider='codex'],
+.dshuh-current[data-provider='codex'] {
+  --dshuh-active-bg: rgba(16, 163, 127, 0.13);
+  --dshuh-active-fg: #0b7a5f;
+  --dshuh-active-line: rgba(16, 163, 127, 0.42);
+}
+body[data-ds-dark-theme] .dshuh-pill[data-active][data-provider='deepseek'],
+body[data-ds-dark-theme] .dshuh-current[data-provider='deepseek'] {
+  --dshuh-active-bg: rgba(127, 162, 255, 0.22);
+  --dshuh-active-fg: #aabfff;
+  --dshuh-active-line: rgba(127, 162, 255, 0.5);
+}
+body[data-ds-dark-theme] .dshuh-pill[data-active][data-provider='opencode-go'],
+body[data-ds-dark-theme] .dshuh-current[data-provider='opencode-go'] {
+  --dshuh-active-bg: rgba(238, 241, 246, 0.14);
+  --dshuh-active-fg: #eef1f6;
+  --dshuh-active-line: rgba(238, 241, 246, 0.35);
+}
+body[data-ds-dark-theme] .dshuh-pill[data-active][data-provider='codex'],
+body[data-ds-dark-theme] .dshuh-current[data-provider='codex'] {
+  --dshuh-active-bg: rgba(46, 204, 159, 0.2);
+  --dshuh-active-fg: #74e6c3;
+  --dshuh-active-line: rgba(46, 204, 159, 0.45);
 }
 .dshuh-current {
   margin-left: 6px; padding: 0 6px; border-radius: 999px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px;
+  background: var(--dshuh-active-bg, var(--dsw-alias-interactive-bg-hover));
+  color: var(--dshuh-active-fg, var(--dsw-alias-label-secondary));
+  box-shadow: inset 0 0 0 1px var(--dshuh-active-line, transparent);
+  font-size: 11px; line-height: 16px; font-weight: 500;
 }
 /* Brand marks in their owners' colours, tuned for a light surface. */
 .dshuh-icon--deepseek { color: #5786fe; }

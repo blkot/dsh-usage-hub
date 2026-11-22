@@ -253,13 +253,12 @@ window.__ModuleLoader__.load({
       return undefined
     }
 
-    /** One dot for a provider state. */
-    function Dot(props) {
-      const { entry, tone } = props
-      const state = entry?.status === 'ok'
-        ? (tone === 'b' ? ' dshuh-dot--b' : tone === 'c' ? ' dshuh-dot--c' : ' dshuh-dot--a')
-        : ' dshuh-dot--muted'
-      return h('span', { className: `dshuh-dot${state}`, 'aria-hidden': true })
+    /** The channel tint a provider label carries. */
+    function channelClass(id) {
+      if (id === 'deepseek') return ' dshuh-channel--a'
+      if (id === 'opencode-go') return ' dshuh-channel--b'
+      if (id === 'codex') return ' dshuh-channel--c'
+      return ''
     }
 
     /** Milliseconds in a day, for the expiry tone thresholds. */
@@ -330,7 +329,6 @@ window.__ModuleLoader__.load({
           : `${entry.label}: ${pillText(t, entry)}${credits.length === 0 ? '' : `, ${t('codex.resetCredits', { count: credits.length })}`}`,
         onClick,
       },
-        h(Dot, { entry, tone: entry?.id === 'deepseek' ? 'a' : entry?.id === 'codex' ? 'c' : 'b' }),
         h('span', null, pillText(t, entry)),
         credits.length === 0 ? null : h('span', { className: 'dshuh-divider', 'aria-hidden': true }),
         credits.length === 0 ? null : h(CreditDots, { t, items: credits }),
@@ -349,7 +347,6 @@ window.__ModuleLoader__.load({
         'aria-label': label,
         onClick,
       },
-        h('span', { className: 'dshuh-dot dshuh-dot--muted', 'aria-hidden': true }),
         h('span', null, label),
       )
     }
@@ -547,11 +544,10 @@ window.__ModuleLoader__.load({
 
     /** One provider section in the panel. */
     function Section(props) {
-      const { t, entry, tone, loading, children } = props
+      const { t, entry, loading, children } = props
       return h('section', { className: 'dshuh-section' },
         h('div', { className: 'dshuh-section-head' },
-          h(Dot, { entry, tone }),
-          h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
+          h('span', { className: `dshuh-section-title${channelClass(entry?.id)}` }, entry?.label ?? ''),
           h('span', { className: 'dshuh-status' }, statusText(t, entry, loading)),
         ),
         children,
@@ -658,9 +654,9 @@ window.__ModuleLoader__.load({
             onClick: () => { if (!state.busy) void load(true) },
           }, state.busy ? t('panel.refreshing') : t('panel.refresh')),
         ),
-        h(Section, { t, entry: deepseek, tone: 'a', loading }, h(DeepSeekBody, { t, entry: deepseek })),
-        h(Section, { t, entry: opencode, tone: 'b', loading }, h(OpencodeBody, { t, entry: opencode })),
-        h(Section, { t, entry: codex, tone: 'c', loading }, h(CodexBody, { t, entry: codex })),
+        h(Section, { t, entry: deepseek, loading }, h(DeepSeekBody, { t, entry: deepseek })),
+        h(Section, { t, entry: opencode, loading }, h(OpencodeBody, { t, entry: opencode })),
+        h(Section, { t, entry: codex, loading }, h(CodexBody, { t, entry: codex })),
         state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
           t('panel.error', { detail: state.error })),
       )
@@ -686,11 +682,9 @@ window.__ModuleLoader__.load({
   }
 }
 .dshuh-pill--warn { color: var(--dsw-alias-label-tertiary); }
-.dshuh-dot { width: 6px; height: 6px; border-radius: 999px; flex: none; background: var(--dsw-alias-label-tertiary); }
-.dshuh-dot--a { background: var(--dsw-alias-chart-system, var(--dsw-alias-label-tertiary)); }
-.dshuh-dot--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
-.dshuh-dot--c { background: var(--dsw-alias-chart-messages, var(--dsw-alias-label-tertiary)); }
-.dshuh-dot--muted { background: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
+.dshuh-section-title.dshuh-channel--a { color: var(--dsw-alias-state-business-primary, var(--dsw-alias-label-primary)); }
+.dshuh-section-title.dshuh-channel--b { color: var(--dsw-alias-chart-tools, var(--dsw-alias-label-primary)); }
+.dshuh-section-title.dshuh-channel--c { color: var(--dsw-alias-chart-messages, var(--dsw-alias-label-primary)); }
 .dshuh-panel {
   position: fixed; z-index: 1100; box-sizing: border-box;
   padding: 12px; border: 0; border-radius: var(--dsw-radius-lg);
@@ -745,12 +739,11 @@ window.__ModuleLoader__.load({
   width: 1px; height: 10px; flex: none; margin: 0 2px;
   background: var(--dsw-alias-border-l2);
 }
-/* Banked credits are rings, not discs: the filled disc is the channel marker. */
-.dshuh-credits { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+/* One cell per banked credit, coloured by how soon it expires. */
+.dshuh-credits { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .dshuh-credit {
-  box-sizing: border-box; width: 5px; height: 5px; flex: none;
-  border-radius: 999px; border: 1.5px solid currentColor; background: transparent;
-  color: var(--dsw-alias-label-tertiary);
+  width: 3px; height: 9px; flex: none; border-radius: 1px;
+  background: currentColor; color: var(--dsw-alias-label-tertiary);
 }
 .dshuh-credit--blue { color: var(--dsw-alias-chart-messages, var(--dsw-alias-label-secondary)); }
 .dshuh-credit--green { color: var(--dsw-alias-state-success-primary, var(--dsw-alias-label-secondary)); }

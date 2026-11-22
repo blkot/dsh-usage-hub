@@ -57,6 +57,7 @@ window.__ModuleLoader__.load({
       'hint.notSignedIn': 'The OpenCode Console workspace is unknown. Sign in with the OpenCode desktop app, then refresh.',
       'hint.cliMissing': 'The OpenCode CLI was not found. Set opencode.cliPath in this bundle configuration, or configure the opencode-go API key so no CLI is needed.',
       'hint.noSource': 'No OpenCode credential was found. Set the opencode-go API key (OPENCODE_GO_API_KEY) in Settings → Models, or install and sign in to the OpenCode desktop app.',
+      'reading.current': 'in use',
       'hint.codexNotSignedIn': 'The Codex CLI is set up but holds no OAuth token. Run `codex login` (or sign in with the Codex app), then refresh.',
       'hint.codexExpired': 'The Codex token was rejected. Run `codex login` again, then refresh.',
       'hint.codexAuthUnreadable': 'The Codex credential file could not be read. Check the path in codex.authPath.',
@@ -107,6 +108,7 @@ window.__ModuleLoader__.load({
       'hint.notSignedIn': '没有找到已登录的 OpenCode Console 工作区，请先用桌面端登录后刷新。',
       'hint.cliMissing': '没找到 OpenCode CLI：可以先在本插件配置里填 opencode.cliPath，或直接配置 opencode-go 的 API Key（这样就不需要 CLI）。',
       'hint.noSource': '没有可用的 OpenCode 凭据：请在「设置 → 模型」里配置 opencode-go 的 API Key（OPENCODE_GO_API_KEY），或安装并登录 OpenCode 桌面端。',
+      'reading.current': '当前',
       'hint.codexNotSignedIn': 'Codex CLI 已配置但没有 OAuth 凭据：运行 codex login（或用 Codex 应用登录）后刷新。',
       'hint.codexExpired': 'Codex 的令牌被拒绝了：重新 codex login 后刷新。',
       'hint.codexAuthUnreadable': '读不到 Codex 凭据文件，请检查 codex.authPath 配置的路径。',
@@ -147,6 +149,7 @@ window.__ModuleLoader__.load({
       busy: false,
       open: false,
       anchor: null,
+      activeProvider: undefined,
     })
     /** Newest snapshot in flight, so a double click cannot start two reads. */
     let inflight = null
@@ -281,6 +284,31 @@ window.__ModuleLoader__.load({
 
     /** Milliseconds in a day, for the expiry tone thresholds. */
     const DAY_MS = 24 * 60 * 60 * 1000
+    /**
+     * DSH provider ids that belong to one reading. The model provider name is
+     * the one the user picked in the composer, not our entry id.
+     */
+    const PROVIDER_ALIASES = {
+      deepseek: ['deepseek', 'deepseek-official', 'deepseek-api', 'deepseek-account'],
+      'opencode-go': ['opencode-go', 'opencode', 'opencode-zen', 'opencode-zen-go'],
+      codex: ['codex', 'openai-codex', 'chatgpt', 'openai'],
+    }
+
+    /**
+     * The reading that matches the provider a session currently generates with.
+     * @param selection - the session's `modelSelection` projection.
+     * @returns our entry id, or undefined when nothing matches.
+     */
+    function activeProviderId(selection) {
+      const provider = typeof selection === 'string' ? selection : selection?.provider
+      if (typeof provider !== 'string' || provider === '') return undefined
+      const lowered = provider.toLowerCase()
+      for (const [id, aliases] of Object.entries(PROVIDER_ALIASES)) {
+        if (aliases.includes(lowered)) return id
+      }
+      return undefined
+    }
+
     /** The banked reset items of one provider entry. */
     function creditsOf(entry) {
       const reset = entry?.resetCredits
@@ -349,7 +377,7 @@ window.__ModuleLoader__.load({
 
     /** One pill button with a provider reading. */
     function Pill(props) {
-      const { t, entry, onClick, open } = props
+      const { t, entry, onClick, open, active } = props
       const credits = entry?.id === 'codex' ? creditsOf(entry) : []
       return h('button', {
         type: 'button',
@@ -359,7 +387,8 @@ window.__ModuleLoader__.load({
         'aria-controls': PANEL_ID,
         'aria-label': entry === undefined
           ? t('panel.never')
-          : `${entry.label}: ${pillText(t, entry)}${credits.length === 0 ? '' : `, ${t('codex.resetCredits', { count: credits.length })}`}`,
+          : `${entry.label}: ${pillText(t, entry)}${credits.length === 0 ? '' : `, ${t('codex.resetCredits', { count: credits.length })}`}${active === true ? `, ${t('reading.current')}` : ''}`,
+        'data-active': active === true ? '' : undefined,
         onClick,
       },
         entry === undefined ? null : h(ChannelIcon, { id: entry.id, size: 12 }),
@@ -387,9 +416,16 @@ window.__ModuleLoader__.load({
 
     /** The composer dock reading that opens the aggregate panel. */
     function Dock(props) {
-      const { t } = props
+      const { t, useProjection } = props
       const state = React.useSyncExternalStore(store.subscribe, store.get, store.get)
       const rootRef = React.useRef(null)
+      // The projection is a hook; it is stable for the life of this mount.
+      const selection = useProjection === undefined ? undefined : useProjection('modelSelection')
+      const activeId = activeProviderId(selection)
+
+      // The panel is a frame-wide overlay without a session, so the reading
+      // publishes the match it can see for the panel to reuse.
+      React.useEffect(() => { store.set({ activeProvider: activeId }) }, [activeId])
 
       // A dock mount belongs to one composer; drop a panel left open when it
       // unmounts (session switch) instead of leaving a floating orphan.
@@ -426,9 +462,9 @@ window.__ModuleLoader__.load({
 
       return h('span', { className: 'dshuh-root', ref: rootRef },
         h('style', null, CSS),
-        deepseek === undefined ? null : h(Pill, { t, entry: deepseek, open: state.open, onClick: toggle }),
-        opencode === undefined ? null : h(Pill, { t, entry: opencode, open: state.open, onClick: toggle }),
-        codex === undefined ? null : h(Pill, { t, entry: codex, open: state.open, onClick: toggle }),
+        deepseek === undefined ? null : h(Pill, { t, entry: deepseek, open: state.open, onClick: toggle, active: activeId === 'deepseek' }),
+        opencode === undefined ? null : h(Pill, { t, entry: opencode, open: state.open, onClick: toggle, active: activeId === 'opencode-go' }),
+        codex === undefined ? null : h(Pill, { t, entry: codex, open: state.open, onClick: toggle, active: activeId === 'codex' }),
       )
     }
 
@@ -578,11 +614,12 @@ window.__ModuleLoader__.load({
 
     /** One provider section in the panel. */
     function Section(props) {
-      const { t, entry, loading, children } = props
-      return h('section', { className: 'dshuh-section' },
+      const { t, entry, loading, active, children } = props
+      return h('section', { className: active === true ? 'dshuh-section dshuh-section--active' : 'dshuh-section' },
         h('div', { className: 'dshuh-section-head' },
           h(ChannelIcon, { id: entry?.id, size: 14 }),
           h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
+          active === true ? h('span', { className: 'dshuh-current' }, t('reading.current')) : null,
           h('span', { className: 'dshuh-status' }, statusText(t, entry, loading)),
         ),
         children,
@@ -689,9 +726,9 @@ window.__ModuleLoader__.load({
             onClick: () => { if (!state.busy) void load(true) },
           }, state.busy ? t('panel.refreshing') : t('panel.refresh')),
         ),
-        h(Section, { t, entry: deepseek, loading }, h(DeepSeekBody, { t, entry: deepseek })),
-        h(Section, { t, entry: opencode, loading }, h(OpencodeBody, { t, entry: opencode })),
-        h(Section, { t, entry: codex, loading }, h(CodexBody, { t, entry: codex })),
+        h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' }, h(DeepSeekBody, { t, entry: deepseek })),
+        h(Section, { t, entry: opencode, loading, active: state.activeProvider === 'opencode-go' }, h(OpencodeBody, { t, entry: opencode })),
+        h(Section, { t, entry: codex, loading, active: state.activeProvider === 'codex' }, h(CodexBody, { t, entry: codex })),
         state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
           t('panel.error', { detail: state.error })),
       )
@@ -731,6 +768,15 @@ window.__ModuleLoader__.load({
 }
 .dshuh-pill--warn { color: var(--dsw-alias-label-tertiary); }
 .dshuh-icon { flex: none; display: block; }
+.dshuh-pill[data-active] {
+  color: var(--dsw-alias-label-primary);
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-border-l2);
+}
+.dshuh-current {
+  margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary); font-size: 11px; line-height: 16px;
+}
 /* Brand marks in their owners' colours, tuned for a light surface. */
 .dshuh-icon--deepseek { color: #5786fe; }
 .dshuh-icon--opencode-go { color: #12161c; }

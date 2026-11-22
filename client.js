@@ -300,7 +300,11 @@ window.__ModuleLoader__.load({
      * @returns our entry id, or undefined when nothing matches.
      */
     function activeProviderId(selection) {
-      const provider = typeof selection === 'string' ? selection : selection?.provider
+      // The projection is `{ lastUsed, pending }` (its wire view names the same
+      // pair `lastUsed` / `next`), so the newest selection is the pending one.
+      const pick = selection?.next ?? selection?.pending ?? selection?.lastUsed
+      const chosen = pick ?? (typeof selection === 'string' ? selection : undefined)
+      const provider = typeof chosen === 'string' ? chosen : chosen?.provider
       if (typeof provider !== 'string' || provider === '') return undefined
       const lowered = provider.toLowerCase()
       for (const [id, aliases] of Object.entries(PROVIDER_ALIASES)) {

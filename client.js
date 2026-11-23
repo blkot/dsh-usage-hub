@@ -322,6 +322,29 @@ window.__ModuleLoader__.load({
       }, h('path', { d: path, fill: 'currentColor' }))
     }
 
+    /** The refresh glyph (lucide's refresh-cw, ISC): an icon, not a word. */
+    function RefreshIcon(props) {
+      const size = props.size ?? 14
+      return h('svg', {
+        className: props.spinning === true ? 'dshuh-icon dshuh-spinning' : 'dshuh-icon',
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        'stroke-width': 2,
+        'stroke-linecap': 'round',
+        'stroke-linejoin': 'round',
+        'aria-hidden': true,
+        focusable: 'false',
+      },
+        h('path', { d: 'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8' }),
+        h('path', { d: 'M21 3v5h-5' }),
+        h('path', { d: 'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16' }),
+        h('path', { d: 'M8 16H3v5' }),
+      )
+    }
+
     /** Milliseconds in a day, for the expiry tone thresholds. */
     const DAY_MS = 24 * 60 * 60 * 1000
     /**
@@ -866,17 +889,15 @@ window.__ModuleLoader__.load({
           h('button', {
             type: 'button',
             className: 'dshuh-refresh',
+            'aria-label': t('panel.refresh'),
+            title: t('panel.refresh'),
             'aria-disabled': state.busy,
             'aria-busy': state.busy,
             onClick: () => { if (!state.busy) void load(true) },
           },
-            // The label never changes: a longer "Refreshing…" reflowed the
-            // header onto a second line. The spinner slot is always reserved.
-            h('span', {
-              className: state.busy ? 'dshuh-spinner dshuh-spinner--on' : 'dshuh-spinner',
-              'aria-hidden': true,
-            }),
-            h('span', null, t('panel.refresh')),
+            // Icon only: the word cost the header its one-line budget, and a
+            // turning glyph already says "working".
+            h(RefreshIcon, { size: 14, spinning: state.busy === true }),
           ),
         ),
         section(t, h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' })),
@@ -1017,17 +1038,16 @@ body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
   font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto;
 }
 .dshuh-refresh {
-  display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 22px; height: 22px; padding: 0; margin-left: 2px;
   border: none; border-radius: var(--dsw-radius-sm); background: transparent;
-  color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; padding: 1px 6px;
+  color: var(--dsw-alias-label-tertiary); cursor: pointer;
 }
-.dshuh-spinner {
-  width: 10px; height: 10px; flex: none; box-sizing: border-box;
-  border-radius: 999px; border: 1.5px solid transparent;
-  border-top-color: var(--dsw-alias-label-secondary);
-  visibility: hidden;
+@media (hover: hover) {
+  .dshuh-refresh:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 }
-.dshuh-spinner--on { visibility: visible; animation: dshuh-spin 0.9s linear infinite; }
+.dshuh-refresh[aria-disabled='true'] { cursor: progress; color: var(--dsw-alias-label-secondary); }
+.dshuh-spinning { animation: dshuh-spin 0.9s linear infinite; transform-origin: center; }
 @keyframes dshuh-spin { to { transform: rotate(360deg); } }
 .dshuh-refresh:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .dshuh-refresh[aria-disabled='true'] { opacity: .6; cursor: progress; }

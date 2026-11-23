@@ -556,129 +556,90 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** DeepSeek balance block. */
-    function DeepSeekBody(props) {
-      const { t, entry } = props
-      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
-      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
-      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'deepseek.hint' })
+    /**
+     * One provider's panel content, split into the two columns the panel uses:
+     * identity and figures on the left, limit dials on the right. States that
+     * replace the reading (never loaded, turned off, failed) return `node`
+     * instead, which spans the full width.
+     */
+    function panelBody(t, entry) {
+      if (entry === undefined) return { node: h('div', { className: 'dshuh-hint' }, t('panel.never')) }
+      if (entry.status === 'disabled') return { node: h('div', { className: 'dshuh-hint' }, t('status.disabled')) }
 
-      const balances = entry.balances ?? []
-      if (balances.length === 0) return h('div', { className: 'dshuh-hint' }, t('deepseek.empty'))
-      return h('div', null,
-        balances.map((balance) => h('div', { key: balance.currency, className: 'dshuh-balance-row' },
-          h('div', { className: 'dshuh-balance' }, money(balance.currency, balance.total)),
-          h('div', { className: 'dshuh-sub' },
-            t('deepseek.breakdown', {
-              toppedUp: money(balance.currency, balance.toppedUp),
-              granted: money(balance.currency, balance.granted),
-            })),
-        )),
-        entry.isAvailable === true ? null : h('div', { className: 'dshuh-warn' }, t('deepseek.unavailable')),
-      )
-    }
+      if (entry.id === 'deepseek') {
+        if (entry.status !== 'ok') return { node: h(Notice, { t, entry, fallbackKey: 'deepseek.hint' }) }
+        const balances = entry.balances ?? []
+        if (balances.length === 0) return { node: h('div', { className: 'dshuh-hint' }, t('deepseek.empty')) }
+        return {
+          main: h('div', null,
+            balances.map((balance) => h('div', { key: balance.currency, className: 'dshuh-figure-row' },
+              h('span', { className: 'dshuh-balance' }, money(balance.currency, balance.total)),
+              h('span', { className: 'dshuh-sub' },
+                t('deepseek.breakdown', {
+                  toppedUp: money(balance.currency, balance.toppedUp),
+                  granted: money(balance.currency, balance.granted),
+                })),
+            )),
+            entry.isAvailable === true ? null : h('div', { className: 'dshuh-warn' }, t('deepseek.unavailable')),
+          ),
+        }
+      }
 
-    /** OpenCode Go allowance block. */
-    function OpencodeBody(props) {
-      const { t, entry } = props
-      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
-      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
-      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'opencode.hint' })
+      if (entry.status !== 'ok') {
+        return { node: h(Notice, { t, entry, fallbackKey: entry.id === 'codex' ? 'codex.hint' : entry.id === 'zai' ? 'zai.hint' : 'opencode.hint' }) }
+      }
 
-      return h('div', null,
-        entry.workspace?.name ? h('div', { className: 'dshuh-sub' }, t('opencode.workspace', { name: entry.workspace.name })) : null,
-        h(Rings, {
-          t,
-          items: WINDOWS.map((window) => ({
-            key: window.key,
-            label: t(`opencode.window.${window.key}`),
-            value: entry.allowance?.[window.key],
-          })),
-        }),
-        entry.workspace?.usageUrl
-          ? h('a', {
-            className: 'dshuh-link',
-            href: entry.workspace.usageUrl,
-            target: '_blank',
-            rel: 'noreferrer',
-          }, t('opencode.openUsage'))
-          : null,
-      )
-    }
-
-    /** The banked-reset summary, expanding to each credit and its expiry. */
-    function BankedResets(props) {
-      const { t, count, items } = props
-      const [open, setOpen] = React.useState(false)
-      return h('div', { className: 'dshuh-banked' },
-        h('button', {
-          type: 'button',
-          className: 'dshuh-banked-toggle',
-          'aria-expanded': open,
-          onClick: () => { setOpen(!open) },
-        },
-          h('span', null, t('codex.resetCredits', { count })),
-          open || items.length === 0 ? null : h(CreditCells, { t, items }),
-          h('span', { className: 'dshuh-caret', 'aria-hidden': true }, open ? '▾' : '▸'),
-        ),
-        open
-          ? h('ul', { className: 'dshuh-banked-list' },
-            items.length === 0
-              ? h('li', { className: 'dshuh-banked-item' }, t('codex.resetCreditsUnknown'))
-              : items.map((item, index) => h('li', {
-                key: item.id === '' ? String(index) : item.id,
-                className: 'dshuh-banked-item',
-              },
-                h('span', { className: 'dshuh-banked-title' },
-                  item.title === '' ? t('codex.resetCreditsItem') : item.title),
-                h('span', { className: 'dshuh-banked-expiry' },
-                  item.expiresAt > 0 ? t('codex.expiresAt', { time: formatReset(item.expiresAt) }) : t('codex.noExpiry')),
-              )))
-          : null,
-      )
-    }
-
-    /** Codex subscription block: plan, the two rate-limit windows, credits. */
-    function CodexBody(props) {
-      const { t, entry } = props
-      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
-      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
-      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'codex.hint' })
-
-      const credits = entry.credits ?? {}
-      // A count-only answer (an older Host half) still renders its summary.
-      const reset = entry.resetCredits
-      const resetCount = typeof reset === 'number' ? reset : Number(reset?.count ?? 0) || 0
-      const resetItems = Array.isArray(reset?.items) ? reset.items : []
-      return h('div', null,
-        entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('codex.plan', { plan: entry.plan })),
-        h(Rings, {
-          t,
-          items: [
-            { key: 'rolling', label: t('codex.window.session'), value: entry.allowance?.rolling },
-            { key: 'weekly', label: t('codex.window.weekly'), value: entry.allowance?.weekly },
-          ],
-        }),
-        credits.unlimited === true
-          ? h('div', { className: 'dshuh-sub' }, t('codex.creditsUnlimited'))
-          : credits.hasCredits === true
-            ? h('div', { className: 'dshuh-sub' }, t('codex.credits', { balance: Number(credits.balance ?? 0).toFixed(2) }))
+      if (entry.id === 'opencode-go') {
+        return {
+          main: entry.workspace?.name
+            ? h('div', { className: 'dshuh-sub' }, t('opencode.workspace', { name: entry.workspace.name }))
             : null,
-        resetCount > 0 ? h(BankedResets, { t, count: resetCount, items: resetItems }) : null,
-      )
-    }
+          limits: h(Rings, {
+            t,
+            items: WINDOWS.map((window) => ({
+              key: window.key,
+              label: t(`opencode.window.${window.key}`),
+              value: entry.allowance?.[window.key],
+            })),
+          }),
+          extra: entry.workspace?.usageUrl
+            ? h('a', {
+              className: 'dshuh-link',
+              href: entry.workspace.usageUrl,
+              target: '_blank',
+              rel: 'noreferrer',
+            }, t('opencode.openUsage'))
+            : null,
+        }
+      }
 
-    /** GLM Coding Plan block: plan, token windows, monthly MCP quota. */
-    function ZaiBody(props) {
-      const { t, entry } = props
-      if (entry === undefined) return h('div', { className: 'dshuh-hint' }, t('panel.never'))
-      if (entry.status === 'disabled') return h('div', { className: 'dshuh-hint' }, t('status.disabled'))
-      if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'zai.hint' })
+      if (entry.id === 'codex') {
+        const credits = entry.credits ?? {}
+        const reset = entry.resetCredits
+        const resetCount = typeof reset === 'number' ? reset : Number(reset?.count ?? 0) || 0
+        const resetItems = Array.isArray(reset?.items) ? reset.items : []
+        const figures = []
+        if (entry.plan !== undefined) figures.push(t('codex.plan', { plan: entry.plan }))
+        if (credits.unlimited === true) figures.push(t('codex.creditsUnlimited'))
+        else if (credits.hasCredits === true) figures.push(t('codex.credits', { balance: Number(credits.balance ?? 0).toFixed(2) }))
+        return {
+          main: figures.length === 0 ? null : h('div', { className: 'dshuh-sub' }, figures.join(' · ')),
+          limits: h(Rings, {
+            t,
+            items: [
+              { key: 'rolling', label: t('codex.window.session'), value: entry.allowance?.rolling },
+              { key: 'weekly', label: t('codex.window.weekly'), value: entry.allowance?.weekly },
+            ],
+          }),
+          extra: resetCount > 0 ? h(BankedResets, { t, count: resetCount, items: resetItems }) : null,
+        }
+      }
 
+      // GLM (Z.ai)
       const labels = entry.labels ?? {}
-      return h('div', null,
-        entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('zai.plan', { plan: entry.plan })),
-        h(Rings, {
+      return {
+        main: entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('zai.plan', { plan: entry.plan })),
+        limits: h(Rings, {
           t,
           items: ['rolling', 'weekly', 'monthly'].map((slot) => ({
             key: slot,
@@ -686,28 +647,40 @@ window.__ModuleLoader__.load({
             value: entry.allowance?.[slot],
           })),
         }),
-      )
+      }
     }
 
-    /** One provider section in the panel. */
+    /**
+     * One provider row: identity and figures on the left, limit dials on the
+     * right. The panel column is wider than the dials need, so a stacked layout
+     * only spent height; the two columns use the width that was already there.
+     */
     function Section(props) {
-      const { t, entry, loading, active, children } = props
+      const { t, entry, loading, active } = props
+      const parts = panelBody(t, entry)
+      const head = h('div', { className: 'dshuh-section-head' },
+        h(ChannelIcon, { id: entry?.id, size: 14 }),
+        h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
+        h('span', {
+          className: `dshuh-lamp dshuh-lamp--${entry?.status ?? 'error'}`,
+          title: statusText(t, entry, loading),
+          'aria-label': statusText(t, entry, loading),
+          role: 'img',
+        }),
+        active === true ? h('span', { className: 'dshuh-current', 'data-provider': entry?.id }, t('reading.current')) : null,
+      )
+
       return h('section', {
         className: active === true ? 'dshuh-section dshuh-section--active' : 'dshuh-section',
         'data-provider': entry?.id,
       },
-        h('div', { className: 'dshuh-section-head' },
-          h(ChannelIcon, { id: entry?.id, size: 14 }),
-          h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
-          h('span', {
-            className: `dshuh-lamp dshuh-lamp--${entry?.status ?? 'error'}`,
-            title: statusText(t, entry, loading),
-            'aria-label': statusText(t, entry, loading),
-            role: 'img',
-          }),
-          active === true ? h('span', { className: 'dshuh-current', 'data-provider': entry?.id }, t('reading.current')) : null,
-        ),
-        children,
+        parts.node === undefined
+          ? h('div', { className: 'dshuh-row' },
+            h('div', { className: 'dshuh-main' }, head, parts.main),
+            parts.limits === undefined ? null : h('div', { className: 'dshuh-limits' }, parts.limits),
+          )
+          : h('div', null, head, parts.node),
+        parts.extra === undefined ? null : parts.extra,
       )
     }
 
@@ -970,14 +943,20 @@ body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
 .dshuh-section-head { display: flex; align-items: center; gap: 6px; }
 .dshuh-section-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
 
-.dshuh-balance-row + .dshuh-balance-row { margin-top: 6px; }
-.dshuh-balance { font-size: 20px; line-height: 28px; font-weight: 500; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
+/* Identity and figures on the left, dials on the right. */
+.dshuh-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 16px; }
+.dshuh-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.dshuh-main .dshuh-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dshuh-limits { justify-self: end; }
+.dshuh-figure-row { display: flex; align-items: baseline; gap: 8px; }
+.dshuh-figure-row + .dshuh-figure-row { margin-top: 4px; }
+.dshuh-balance { font-size: 17px; line-height: 24px; font-weight: 500; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 .dshuh-sub { color: var(--dsw-alias-label-tertiary); }
 .dshuh-hint { margin-top: 4px; color: var(--dsw-alias-label-secondary); }
 .dshuh-detail { margin-top: 2px; font-size: 11px; color: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
 .dshuh-warn { color: var(--dsw-alias-state-warn-label, var(--dsw-alias-label-primary)); font-weight: 500; }
 /* One dial per window: three windows share a single 30 px row. */
-.dshuh-rings { display: flex; align-items: flex-start; gap: 14px; margin-top: 8px; }
+.dshuh-rings { display: flex; align-items: flex-start; gap: 14px; }
 .dshuh-ring-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .dshuh-ring { position: relative; display: grid; place-items: center; width: 30px; height: 30px; }
 .dshuh-ring svg { display: block; }

@@ -40,6 +40,9 @@ window.__ModuleLoader__.load({
       'panel.refresh': 'Refresh',
       'panel.refreshing': 'Refreshing…',
       'panel.updated': 'Updated {time}',
+      'panel.justNow': 'just now',
+      'panel.minutesAgo': '{count}m ago',
+      'panel.hoursAgo': '{count}h ago',
       'panel.never': 'Not loaded yet',
       'panel.error': 'The usage read failed: {detail}',
       'panel.sectionFailed': 'This reading could not be drawn; the others are unaffected.',
@@ -98,6 +101,9 @@ window.__ModuleLoader__.load({
       'panel.refresh': '刷新',
       'panel.refreshing': '刷新中…',
       'panel.updated': '更新于 {time}',
+      'panel.justNow': '刚刚',
+      'panel.minutesAgo': '{count} 分钟前',
+      'panel.hoursAgo': '{count} 小时前',
       'panel.never': '尚未加载',
       'panel.error': '读取用量失败：{detail}',
       'panel.sectionFailed': '这一条读数渲染失败，其它读数不受影响。',
@@ -210,6 +216,25 @@ window.__ModuleLoader__.load({
       return date.toLocaleString(undefined, {
         month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
       })
+    }
+
+    /**
+     * A short age for the panel header ("just now", "12m ago", "3h ago") so the
+     * timestamp and the refresh control share one line. The exact instant stays
+     * in the element's title.
+     * @param t - locale seat.
+     * @param at - collection time, epoch milliseconds.
+     * @returns compact age, or the short date once it is a day old.
+     */
+    function formatAge(t, at) {
+      if (!Number.isFinite(at) || at <= 0) return t('panel.never')
+      const seconds = Math.max(0, Math.round((Date.now() - at) / 1000))
+      if (seconds < 60) return t('panel.justNow')
+      const minutes = Math.round(seconds / 60)
+      if (minutes < 60) return t('panel.minutesAgo', { count: minutes })
+      const hours = Math.round(minutes / 60)
+      if (hours < 24) return t('panel.hoursAgo', { count: hours })
+      return formatReset(at)
     }
 
     /** Highest allowance percentage a provider reported, or undefined. */
@@ -815,8 +840,9 @@ window.__ModuleLoader__.load({
       const opencode = entryOf(state.snapshot, 'opencode-go')
       const codex = entryOf(state.snapshot, 'codex')
       const zai = entryOf(state.snapshot, 'zai')
-      const updated = state.snapshot === null
-        ? t('panel.never')
+      const updated = state.snapshot === null ? t('panel.never') : formatAge(t, state.snapshot.at)
+      const updatedExact = state.snapshot === null
+        ? undefined
         : t('panel.updated', { time: formatReset(state.snapshot.at) })
 
       return h('div', {
@@ -836,7 +862,7 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h('div', { className: 'dshuh-head' },
           h('span', { className: 'dshuh-title' }, t('panel.title')),
-          h('span', { className: 'dshuh-updated' }, updated),
+          h('span', { className: 'dshuh-updated', title: updatedExact }, updated),
           h('button', {
             type: 'button',
             className: 'dshuh-refresh',
@@ -981,9 +1007,15 @@ body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 .dshuh-panel:focus { outline: none; }
-.dshuh-head { display: flex; align-items: center; gap: 8px; }
-.dshuh-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
-.dshuh-updated { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
+.dshuh-head { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.dshuh-title {
+  font-weight: 500; color: var(--dsw-alias-label-primary);
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dshuh-updated {
+  margin-left: auto; color: var(--dsw-alias-label-tertiary);
+  font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto;
+}
 .dshuh-refresh {
   display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap;
   border: none; border-radius: var(--dsw-radius-sm); background: transparent;

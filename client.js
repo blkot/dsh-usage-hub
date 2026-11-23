@@ -42,6 +42,7 @@ window.__ModuleLoader__.load({
       'panel.updated': 'Updated {time}',
       'panel.never': 'Not loaded yet',
       'panel.error': 'The usage read failed: {detail}',
+      'panel.sectionFailed': 'This reading could not be drawn; the others are unaffected.',
       'status.ok': 'Connected',
       'status.unconfigured': 'Not configured',
       'status.error': 'Error',
@@ -99,6 +100,7 @@ window.__ModuleLoader__.load({
       'panel.updated': '更新于 {time}',
       'panel.never': '尚未加载',
       'panel.error': '读取用量失败：{detail}',
+      'panel.sectionFailed': '这一条读数渲染失败，其它读数不受影响。',
       'status.ok': '已连接',
       'status.unconfigured': '未配置',
       'status.error': '出错',
@@ -556,6 +558,57 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The banked-reset summary, expanding to each credit and its expiry. */
+    function BankedResets(props) {
+      const { t, count, items } = props
+      const [open, setOpen] = React.useState(false)
+      return h('div', { className: 'dshuh-banked' },
+        h('button', {
+          type: 'button',
+          className: 'dshuh-banked-toggle',
+          'aria-expanded': open,
+          onClick: () => { setOpen(!open) },
+        },
+          h('span', null, t('codex.resetCredits', { count })),
+          open || items.length === 0 ? null : h(CreditCells, { t, items }),
+          h('span', { className: 'dshuh-caret', 'aria-hidden': true }, open ? '▾' : '▸'),
+        ),
+        open
+          ? h('ul', { className: 'dshuh-banked-list' },
+            items.length === 0
+              ? h('li', { className: 'dshuh-banked-item' }, t('codex.resetCreditsUnknown'))
+              : items.map((item, index) => h('li', {
+                key: item.id === '' ? String(index) : item.id,
+                className: 'dshuh-banked-item',
+              },
+                h('span', { className: 'dshuh-banked-title' },
+                  item.title === '' ? t('codex.resetCreditsItem') : item.title),
+                h('span', { className: 'dshuh-banked-expiry' },
+                  item.expiresAt > 0 ? t('codex.expiresAt', { time: formatReset(item.expiresAt) }) : t('codex.noExpiry')),
+              )))
+          : null,
+      )
+    }
+
+    /**
+     * Keeps one broken reading from blanking the whole panel: a section that
+     * throws during render is replaced by a one-line notice instead.
+     */
+    class SectionBoundary extends React.Component {
+      constructor(props) {
+        super(props)
+        this.state = { failed: false }
+      }
+
+      static getDerivedStateFromError() {
+        return { failed: true }
+      }
+
+      render() {
+        return this.state.failed ? this.props.fallback : this.props.children
+      }
+    }
+
     /**
      * One provider's panel content, split into the two columns the panel uses:
      * identity and figures on the left, limit dials on the right. States that
@@ -684,6 +737,13 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** One section, isolated so a throw becomes a one-line notice. */
+    function section(t, node) {
+      return h(SectionBoundary, {
+        fallback: h('div', { className: 'dshuh-hint' }, t('panel.sectionFailed')),
+      }, node)
+    }
+
     /** The frame overlay panel with both providers and the refresh control. */
     function Panel(props) {
       const { t } = props
@@ -793,10 +853,10 @@ window.__ModuleLoader__.load({
             h('span', null, t('panel.refresh')),
           ),
         ),
-        h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' }, h(DeepSeekBody, { t, entry: deepseek })),
-        h(Section, { t, entry: opencode, loading, active: state.activeProvider === 'opencode-go' }, h(OpencodeBody, { t, entry: opencode })),
-        h(Section, { t, entry: codex, loading, active: state.activeProvider === 'codex' }, h(CodexBody, { t, entry: codex })),
-        h(Section, { t, entry: zai, loading, active: state.activeProvider === 'zai' }, h(ZaiBody, { t, entry: zai })),
+        section(t, h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' })),
+        section(t, h(Section, { t, entry: opencode, loading, active: state.activeProvider === 'opencode-go' })),
+        section(t, h(Section, { t, entry: codex, loading, active: state.activeProvider === 'codex' })),
+        section(t, h(Section, { t, entry: zai, loading, active: state.activeProvider === 'zai' })),
         state.error === null ? null : h('div', { className: 'dshuh-error', role: 'alert' },
           t('panel.error', { detail: state.error })),
       )

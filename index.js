@@ -550,7 +550,7 @@ async function deepseekUsage(ctx, options) {
  * @param recordKey - optional `llm-pi-ai/<provider>` record to fall back to.
  * @returns `{ value, source }`, or undefined when nothing is set.
  */
-async function resolveCredential(ctx, reference, recordKey) {
+function credentialStore(ctx) {
   let credentials
   try {
     credentials = ctx.get('credentials')
@@ -565,6 +565,57 @@ async function resolveCredential(ctx, reference, recordKey) {
       credentials = undefined
     }
   }
+  return credentials === undefined ? undefined : credentials
+}
+
+/**
+ * Reference names a GLM Coding Plan key is commonly stored under.
+ */
+const ZAI_KEY_REFS = [
+  'ZAI_API_KEY',
+  'ZAI_CODING_CN_API_KEY',
+  'ZHIPU_API_KEY',
+  'ZHIPU_CODING_CN_API_KEY',
+  'GLM_API_KEY',
+  'GLM_CODING_API_KEY',
+]
+
+/**
+ * Resolve the GLM key from the configured reference, the names DSH and the
+ * common GLM tools use, then any provider sign-in record for a z.ai/Zhipu
+ * route. Without this the reading sat at "turned off" on a machine that had
+ * the key under a different name.
+ *
+ * @param ctx - Host context.
+ * @param options - zai settings.
+ * @returns `{ value, source }`, or undefined when no key is stored anywhere.
+ */
+async function zaiCredential(ctx, options) {
+  for (const reference of [options.apiKeyEnv, ...ZAI_KEY_REFS]) {
+    if (typeof reference !== 'string' || reference === '') continue
+    const hit = await resolveCredential(ctx, reference)
+    if (hit !== undefined) return { ...hit, reference }
+  }
+  const credentials = credentialStore(ctx)
+  if (credentials === undefined || typeof credentials.listRecords !== 'function' || typeof credentials.readRecord !== 'function') {
+    return undefined
+  }
+  try {
+    for (const entry of await credentials.listRecords()) {
+      const key = String(entry?.key ?? '')
+      if (!key.startsWith('llm-pi-ai/')) continue
+      if (!/(zai|zhipu|glm|bigmodel)/i.test(key)) continue
+      const record = await credentials.readRecord(key)
+      if (typeof record?.key === 'string' && record.key !== '') return { value: record.key, source: key }
+    }
+  } catch {
+    // A record read failure just means no record supplied the key.
+  }
+  return undefined
+}
+
+async function resolveCredential(ctx, reference, recordKey) {
+  const credentials = credentialStore(ctx)
   if (credentials !== undefined && credentials !== null && typeof credentials.resolve === 'function') {
     try {
       const hit = await credentials.resolve(reference)
@@ -963,10 +1014,48 @@ function codexInstant(value) {
  */
 async function zaiUsage(ctx, options) {
   if (!options.enabled) return undefined
-  const credential = await resolveCredential(ctx, options.apiKeyEnv)
+  const credential = await zaiCredential(ctx, options)
   if (credential === undefined) return undefined
 
-  const answer = await readJson(`${options.baseUrl}/api/monitor/usage/quota/limit`, {
+  let failure
+  for (const base of zaiBases(options, credential)) {
+    const outcome = await zaiRead(base, credential, options)
+    if (outcome.entry !== undefined) return outcome.entry
+    failure = outcome.error
+    if (outcome.retry !== true) return failure
+  }
+  return failure
+}
+
+/**
+ * Candidate hosts for the quota read.
+ *
+ * A GLM key belongs to one region, and the reference it is stored under often
+ * says which ("…_CN_…"); the other host is tried second, because the two
+ * answer a foreign key with an authentication failure rather than a 404.
+ *
+ * @param options - zai settings.
+ * @param credential - resolved key and its source.
+ * @returns base URLs in attempt order.
+ */
+function zaiBases(options, credential) {
+  if (options.baseUrl !== 'https://api.z.ai') return [options.baseUrl]
+  const cn = 'https://open.bigmodel.cn'
+  const intl = 'https://api.z.ai'
+  const prefersCn = /_CN_|bigmodel/i.test(String(credential.reference ?? ''))
+  return prefersCn ? [cn, intl] : [intl, cn]
+}
+
+/**
+ * One quota read against one host.
+ * @param base - host base URL.
+ * @param credential - resolved key.
+ * @param options - zai settings.
+ * @returns `{ entry }` on success, else `{ error, retry }`.
+ */
+async function zaiRead(base, credential, options) {
+  const host = base.endsWith('/') ? base.slice(0, -1) : base
+  const answer = await readJson(`${host}/api/monitor/usage/quota/limit`, {
     authorization: `Bearer ${credential.value}`,
     accept: 'application/json',
   }, options.proxy)
@@ -974,11 +1063,14 @@ async function zaiUsage(ctx, options) {
   const body = parseJson(answer.text)
   if (body === undefined) {
     return {
-      status: 'error',
       error: {
-        code: 'unexpected-payload',
-        message: `Z.ai answered HTTP ${answer.status} without JSON: ${clip(answer.text)}`,
+        status: 'error',
+        error: {
+          code: 'unexpected-payload',
+          message: `${host} answered HTTP ${answer.status} without JSON: ${clip(answer.text)}`,
+        },
       },
+      retry: false,
     }
   }
   if (body.success !== true) {
@@ -986,11 +1078,15 @@ async function zaiUsage(ctx, options) {
     const unauthenticated = code === 401 || code === 1001
     const message = typeof body.msg === 'string' ? body.msg : `HTTP ${answer.status}`
     return {
-      status: unauthenticated ? 'unconfigured' : 'error',
       error: {
-        code: unauthenticated ? 'zai-key-rejected' : `zai-${code}`,
-        message: `Z.ai refused the read: ${clip(message)}`,
+        status: unauthenticated ? 'unconfigured' : 'error',
+        error: {
+          code: unauthenticated ? 'zai-key-rejected' : `zai-${code}`,
+          message: `${host} refused the read: ${clip(message)}`,
+        },
       },
+      // A rejected key on one region is worth one try on the other.
+      retry: unauthenticated,
     }
   }
 
@@ -1014,30 +1110,30 @@ async function zaiUsage(ctx, options) {
   }
   if (allowance.rolling === undefined && allowance.weekly === undefined && allowance.monthly === undefined) {
     return {
-      status: 'error',
       error: {
-        code: 'unexpected-payload',
-        message: `Z.ai returned no known quota limit: ${clip(JSON.stringify(data))}`,
+        status: 'error',
+        error: {
+          code: 'unexpected-payload',
+          message: `${host} returned no known quota limit: ${clip(JSON.stringify(data))}`,
+        },
       },
+      retry: false,
     }
   }
 
   const level = nonEmptyString(data.level)
   return {
-    status: 'ok',
-    source: 'zai-monitor',
-    credentialSource: credential.source,
-    plan: level === undefined ? undefined : `${level.charAt(0).toUpperCase()}${level.slice(1)}`,
-    allowance,
-    labels,
+    entry: {
+      status: 'ok',
+      source: 'zai-monitor',
+      credentialSource: credential.source,
+      plan: level === undefined ? undefined : `${level.charAt(0).toUpperCase()}${level.slice(1)}`,
+      allowance,
+      labels,
+    },
   }
 }
 
-/**
- * Normalize one Z.ai quota limit.
- * @param limit - one `limits` entry.
- * @returns normalized window.
- */
 function zaiWindow(limit) {
   const percent = Number(limit.percentage)
   const known = Number.isFinite(percent)

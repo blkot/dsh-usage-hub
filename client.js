@@ -769,7 +769,15 @@ window.__ModuleLoader__.load({
             'aria-disabled': state.busy,
             'aria-busy': state.busy,
             onClick: () => { if (!state.busy) void load(true) },
-          }, state.busy ? t('panel.refreshing') : t('panel.refresh')),
+          },
+            // The label never changes: a longer "Refreshing…" reflowed the
+            // header onto a second line. The spinner slot is always reserved.
+            h('span', {
+              className: state.busy ? 'dshuh-spinner dshuh-spinner--on' : 'dshuh-spinner',
+              'aria-hidden': true,
+            }),
+            h('span', null, t('panel.refresh')),
+          ),
         ),
         h(Section, { t, entry: deepseek, loading, active: state.activeProvider === 'deepseek' }, h(DeepSeekBody, { t, entry: deepseek })),
         h(Section, { t, entry: opencode, loading, active: state.activeProvider === 'opencode-go' }, h(OpencodeBody, { t, entry: opencode })),
@@ -903,9 +911,18 @@ body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
 .dshuh-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
 .dshuh-updated { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-variant-numeric: tabular-nums; }
 .dshuh-refresh {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; white-space: nowrap;
   border: none; border-radius: var(--dsw-radius-sm); background: transparent;
   color: var(--dsw-alias-label-secondary); font: inherit; cursor: pointer; padding: 1px 6px;
 }
+.dshuh-spinner {
+  width: 10px; height: 10px; flex: none; box-sizing: border-box;
+  border-radius: 999px; border: 1.5px solid transparent;
+  border-top-color: var(--dsw-alias-label-secondary);
+  visibility: hidden;
+}
+.dshuh-spinner--on { visibility: visible; animation: dshuh-spin 0.9s linear infinite; }
+@keyframes dshuh-spin { to { transform: rotate(360deg); } }
 .dshuh-refresh:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 .dshuh-refresh[aria-disabled='true'] { opacity: .6; cursor: progress; }
 .dshuh-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l2); }

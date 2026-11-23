@@ -1,12 +1,12 @@
 # dsh-usage-hub
 
-Aggregated subscription usage for the [DeepSeek Harness](https://github.com/deepseek-ai/dsh) composer dock: the DeepSeek API balance, the OpenCode Go allowance and the Codex subscription, side by side, in one panel.
+Aggregated subscription usage for the [DeepSeek Harness](https://github.com/deepseek-ai/dsh) composer dock: the DeepSeek API balance, the OpenCode Go allowance, the Codex subscription and the GLM (Z.ai) plan, side by side, in one panel.
 
 ```
-[● DeepSeek ¥110.00]  [● Go 7%]  [● Codex 23%]
+[DeepSeek ¥110.00]  [Go 7%]  [Codex 23%]  [GLM 18%]
 ```
 
-Click either reading for the panel: DeepSeek balance with its topped-up/granted split, the OpenCode Go bars with reset times, the Codex 5-hour and weekly limits with the plan name and credits, and a Refresh button.
+Click any reading for the panel: one row per provider, a small dial per limit window (percentage inside, window name underneath, reset time on hover), a green lamp beside the name once the provider has answered, the DeepSeek balance with its topped-up/granted split, the Codex plan and credits, and a Refresh button.
 
 ## Install
 

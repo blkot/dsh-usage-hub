@@ -489,20 +489,59 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** One allowance window row. */
-    function Meter(props) {
-      const { t, label, value, tint } = props
+    /** Ring geometry: 30 px box, 3 px stroke. */
+    const RING_SIZE = 30
+    const RING_RADIUS = 12
+    const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS
+
+    /** One quota ring: the percentage inside, the window name underneath. */
+    function Ring(props) {
+      const { t, label, value } = props
       const percent = value === undefined ? 0 : Math.max(0, Math.min(100, Number(value.percent) || 0))
-      return h('div', { className: 'dshuh-meter' },
-        h('div', { className: 'dshuh-meter-head' },
-          h('span', { className: 'dshuh-meter-label' }, label),
-          h('span', { className: 'dshuh-meter-value' },
-            value === undefined ? t('common.na') : `${Math.round(percent)}%`),
-          value?.limited === true ? h('span', { className: 'dshuh-warn' }, t('opencode.limited')) : null,
-        ),
-        h('div', { className: 'dshuh-track' },
-          h('div', { className: `dshuh-fill ${tint}`, style: { width: `${percent}%` } })),
-        value?.resetsAt ? h('div', { className: 'dshuh-reset' }, t('opencode.resets', { time: formatReset(value.resetsAt) })) : null,
+      const reset = value?.resetsAt ? t('opencode.resets', { time: formatReset(value.resetsAt) }) : undefined
+      const reading = value === undefined ? t('common.na') : `${Math.round(percent)}%`
+      const note = value?.limited === true ? t('opencode.limited') : undefined
+      return h('div', {
+        className: 'dshuh-ring',
+        title: reset === undefined ? note : note === undefined ? reset : `${note} · ${reset}`,
+        'aria-label': `${label}: ${reading}${note === undefined ? '' : `, ${note}`}${reset === undefined ? '' : `, ${reset}`}`,
+        role: 'img',
+      },
+        h('svg', {
+          width: RING_SIZE,
+          height: RING_SIZE,
+          viewBox: `0 0 ${RING_SIZE} ${RING_SIZE}`,
+          'aria-hidden': true,
+          focusable: 'false',
+        },
+          h('circle', { className: 'dshuh-ring-track', cx: 15, cy: 15, r: RING_RADIUS }),
+          h('circle', {
+            className: value?.limited === true ? 'dshuh-ring-fill dshuh-ring-fill--warn' : 'dshuh-ring-fill',
+            cx: 15,
+            cy: 15,
+            r: RING_RADIUS,
+            strokeDasharray: `${(RING_CIRCUMFERENCE * percent) / 100} ${RING_CIRCUMFERENCE}`,
+            transform: 'rotate(-90 15 15)',
+          })),
+        h('span', { className: 'dshuh-ring-value' }, reading),
+      )
+    }
+
+    /**
+     * One row of rings for the windows a provider reports.
+     *
+     * Rings replace the stacked bar rows: three windows used to cost three
+     * label+bar+reset rows, and now share one line of 30 px dials. The exact
+     * reset instant moves to the ring's tooltip.
+     */
+    function Rings(props) {
+      const { t, items } = props
+      const shown = items.filter((item) => item.value !== undefined)
+      if (shown.length === 0) return null
+      return h('div', { className: 'dshuh-rings' },
+        shown.map((item) => h('div', { key: item.key, className: 'dshuh-ring-cell' },
+          h(Ring, { t, label: item.label, value: item.value }),
+          h('span', { className: 'dshuh-ring-label' }, item.label))),
       )
     }
 
@@ -548,13 +587,14 @@ window.__ModuleLoader__.load({
 
       return h('div', null,
         entry.workspace?.name ? h('div', { className: 'dshuh-sub' }, t('opencode.workspace', { name: entry.workspace.name })) : null,
-        WINDOWS.map((window) => h(Meter, {
-          key: window.key,
+        h(Rings, {
           t,
-          label: t(`opencode.window.${window.key}`),
-          value: entry.allowance?.[window.key],
-          tint: window.tint,
-        })),
+          items: WINDOWS.map((window) => ({
+            key: window.key,
+            label: t(`opencode.window.${window.key}`),
+            value: entry.allowance?.[window.key],
+          })),
+        }),
         entry.workspace?.usageUrl
           ? h('a', {
             className: 'dshuh-link',
@@ -612,17 +652,12 @@ window.__ModuleLoader__.load({
       const resetItems = Array.isArray(reset?.items) ? reset.items : []
       return h('div', null,
         entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('codex.plan', { plan: entry.plan })),
-        h(Meter, {
+        h(Rings, {
           t,
-          label: t('codex.window.session'),
-          value: entry.allowance?.rolling,
-          tint: 'dshuh-tint--a',
-        }),
-        h(Meter, {
-          t,
-          label: t('codex.window.weekly'),
-          value: entry.allowance?.weekly,
-          tint: 'dshuh-tint--c',
+          items: [
+            { key: 'rolling', label: t('codex.window.session'), value: entry.allowance?.rolling },
+            { key: 'weekly', label: t('codex.window.weekly'), value: entry.allowance?.weekly },
+          ],
         }),
         credits.unlimited === true
           ? h('div', { className: 'dshuh-sub' }, t('codex.creditsUnlimited'))
@@ -641,30 +676,36 @@ window.__ModuleLoader__.load({
       if (entry.status !== 'ok') return h(Notice, { t, entry, fallbackKey: 'zai.hint' })
 
       const labels = entry.labels ?? {}
-      const tints = { rolling: 'dshuh-tint--a', weekly: 'dshuh-tint--c', monthly: 'dshuh-tint--b' }
       return h('div', null,
         entry.plan === undefined ? null : h('div', { className: 'dshuh-sub' }, t('zai.plan', { plan: entry.plan })),
-        ['rolling', 'weekly', 'monthly'].map((slot) => entry.allowance?.[slot] === undefined
-          ? null
-          : h(Meter, {
+        h(Rings, {
+          t,
+          items: ['rolling', 'weekly', 'monthly'].map((slot) => ({
             key: slot,
-            t,
             label: t(`zai.window.${labels[slot] ?? 'tokens'}`),
-            value: entry.allowance[slot],
-            tint: tints[slot],
+            value: entry.allowance?.[slot],
           })),
+        }),
       )
     }
 
     /** One provider section in the panel. */
     function Section(props) {
       const { t, entry, loading, active, children } = props
-      return h('section', { className: active === true ? 'dshuh-section dshuh-section--active' : 'dshuh-section' },
+      return h('section', {
+        className: active === true ? 'dshuh-section dshuh-section--active' : 'dshuh-section',
+        'data-provider': entry?.id,
+      },
         h('div', { className: 'dshuh-section-head' },
           h(ChannelIcon, { id: entry?.id, size: 14 }),
           h('span', { className: 'dshuh-section-title' }, entry?.label ?? ''),
+          h('span', {
+            className: `dshuh-lamp dshuh-lamp--${entry?.status ?? 'error'}`,
+            title: statusText(t, entry, loading),
+            'aria-label': statusText(t, entry, loading),
+            role: 'img',
+          }),
           active === true ? h('span', { className: 'dshuh-current', 'data-provider': entry?.id }, t('reading.current')) : null,
-          h('span', { className: 'dshuh-status' }, statusText(t, entry, loading)),
         ),
         children,
       )
@@ -928,23 +969,43 @@ body[data-ds-dark-theme] .dshuh-icon--codex { color: #2ecc9f; }
 .dshuh-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--dsw-alias-border-l2); }
 .dshuh-section-head { display: flex; align-items: center; gap: 6px; }
 .dshuh-section-title { font-weight: 500; color: var(--dsw-alias-label-primary); }
-.dshuh-status { margin-left: auto; color: var(--dsw-alias-label-tertiary); }
+
 .dshuh-balance-row + .dshuh-balance-row { margin-top: 6px; }
 .dshuh-balance { font-size: 20px; line-height: 28px; font-weight: 500; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
 .dshuh-sub { color: var(--dsw-alias-label-tertiary); }
 .dshuh-hint { margin-top: 4px; color: var(--dsw-alias-label-secondary); }
 .dshuh-detail { margin-top: 2px; font-size: 11px; color: var(--dsw-alias-label-caption, var(--dsw-alias-label-tertiary)); }
 .dshuh-warn { color: var(--dsw-alias-state-warn-label, var(--dsw-alias-label-primary)); font-weight: 500; }
-.dshuh-meter { margin-top: 8px; }
-.dshuh-meter-head { display: flex; align-items: center; gap: 6px; }
-.dshuh-meter-label { color: var(--dsw-alias-label-secondary); }
-.dshuh-meter-value { margin-left: auto; color: var(--dsw-alias-label-primary); font-variant-numeric: tabular-nums; }
-.dshuh-track { margin-top: 4px; height: 4px; border-radius: 999px; background: var(--dsw-alias-interactive-bg-hover); overflow: hidden; }
-.dshuh-fill { height: 100%; border-radius: 999px; background: var(--dsw-alias-label-tertiary); }
-.dshuh-fill.dshuh-tint--a { background: var(--dsw-alias-chart-system, var(--dsw-alias-label-tertiary)); }
-.dshuh-fill.dshuh-tint--b { background: var(--dsw-alias-chart-tools, var(--dsw-alias-label-tertiary)); }
-.dshuh-fill.dshuh-tint--c { background: var(--dsw-alias-chart-messages, var(--dsw-alias-label-tertiary)); }
-.dshuh-reset { color: var(--dsw-alias-label-tertiary); }
+/* One dial per window: three windows share a single 30 px row. */
+.dshuh-rings { display: flex; align-items: flex-start; gap: 14px; margin-top: 8px; }
+.dshuh-ring-cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.dshuh-ring { position: relative; display: grid; place-items: center; width: 30px; height: 30px; }
+.dshuh-ring svg { display: block; }
+.dshuh-ring-track { fill: none; stroke: var(--dsw-alias-border-l2); stroke-width: 3; }
+.dshuh-ring-fill {
+  fill: none; stroke: var(--dshuh-ring-color, var(--dsw-alias-label-secondary));
+  stroke-width: 3; stroke-linecap: round;
+}
+.dshuh-ring-fill--warn { stroke: var(--dsw-alias-state-warn-primary); }
+.dshuh-ring-value {
+  position: absolute; font-size: 9px; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-primary);
+}
+.dshuh-ring-label { font-size: 10px; line-height: 12px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; }
+.dshuh-section[data-provider='deepseek'] { --dshuh-ring-color: #5786fe; }
+.dshuh-section[data-provider='opencode-go'] { --dshuh-ring-color: #12161c; }
+.dshuh-section[data-provider='codex'] { --dshuh-ring-color: #10a37f; }
+.dshuh-section[data-provider='zai'] { --dshuh-ring-color: #4f5bd5; }
+body[data-ds-dark-theme] .dshuh-section[data-provider='deepseek'] { --dshuh-ring-color: #7fa2ff; }
+body[data-ds-dark-theme] .dshuh-section[data-provider='opencode-go'] { --dshuh-ring-color: #eef1f6; }
+body[data-ds-dark-theme] .dshuh-section[data-provider='codex'] { --dshuh-ring-color: #2ecc9f; }
+body[data-ds-dark-theme] .dshuh-section[data-provider='zai'] { --dshuh-ring-color: #a5b4fc; }
+/* Connection state is a lamp beside the name, not a word on the right. */
+.dshuh-lamp { width: 6px; height: 6px; border-radius: 999px; flex: none; margin-left: 5px; }
+.dshuh-lamp--ok { background: var(--dsw-alias-state-success-primary); }
+.dshuh-lamp--unconfigured { background: var(--dsw-alias-state-warn-primary); }
+.dshuh-lamp--error { background: var(--dsw-alias-state-error-primary); }
+.dshuh-lamp--disabled { background: var(--dsw-alias-border-l3); }
 .dshuh-banked { margin-top: 6px; }
 .dshuh-banked-toggle {
   display: inline-flex; align-items: center; gap: 6px; padding: 0;
